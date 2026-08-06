@@ -1,0 +1,25 @@
+# logs / traces
+*.log
+log.txt
+train.log
+score_log.txt
+money_trace.txt
+sim_output.txt
+filtered*.log
+stderr*.log
+stdout*.log
+
+# large artifacts
+*.webm
+*.npz
+*.zip
+*.tar.gz
+rl_checkpoints/
+rl_logs/
+rl_best/
+__pycache__/
+.venv/
+.venv312/
+
+# tuner output
+tuning/

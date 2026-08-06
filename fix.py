@@ -1,0 +1,15 @@
+with open("revancedmain.py", "r") as f:
+    code = f.read()
+code = code.replace(r"orders \+= plan_sells\(shed, minv, day, hour, total_days, hold\)", "orders += plan_sells(shed, minv, day, hour, total_days, hold)")
+code = code.replace(r"work = len\(scan\[\"water\"\]\) \+ len\(scan\[\"feed\"\]\) \+ len\(scan\[\"harvest_crop\"\]\) \\", """work = len(scan["water"]) + len(scan["feed"]) + len(scan["harvest_crop"]) \\""")
+code = code.replace(r"\+ len\(scan\[\"harvest_animal\"\]\) \+ min\(len\(picks\), len\(free_cells\)\) \+ len\(scan\[\"weeds\"\]\) \\", """+ len(scan["harvest_animal"]) + min(len(picks), len(free_cells)) + len(scan["weeds"]) \\""")
+code = code.replace(r"\+ len\(scan\[\"care\"\]\) \+ len\(scan\[\"collect\"\]\)", """+ len(scan["care"]) + len(scan["collect"])""")
+code = code.replace(r"want = _desired_hands\(work, money_left\)", "want = _desired_hands(work, money_left)")
+code = code.replace(r"hires_today = int\(me\.get\(\"hires_today\", 0\)\)", "hires_today = int(me.get(\"hires_today\", 0))")
+code = code.replace(r"c = hire_cost\(hires_today \+ h\)", "c = hire_cost(hires_today + h)")
+code = code.replace(r"while hires_today \+ h < want:", "while hires_today + h < want:")
+code = code.replace(r"if money_left < c \+ 50:", "if money_left < c + 50:")
+code = code.replace(r"orders\.append\(\[\"HIRE\"\]\)", "orders.append([\"HIRE\"])")
+code = code.replace(r"h \+= 1", "h += 1")
+with open("revancedmain.py", "w") as f:
+    f.write(code)

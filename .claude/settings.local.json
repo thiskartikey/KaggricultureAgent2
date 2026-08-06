@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n 'LOCAL.*bin\\\\|local/bin' ~/.bashrc 2>/dev/null | head -5)",
+      "WebSearch"
+    ]
+  }
+}
