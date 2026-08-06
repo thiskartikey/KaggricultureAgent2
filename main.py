@@ -5,6 +5,25 @@ Bundle:     tar -czf submission.tar.gz main.py rl_inference.py rl_weights.npz
 """
 import math, os
 
+# ── tunable knobs ────────────────────────────────────────────────────────────
+# Defaults are the committed baseline (mean 10734 on the eval_seeds set). The
+# offline tuner overrides them via KAGR_PARAMS=<file.json>; when that env var is
+# absent -- as in a real submission -- these values are used unchanged.
+P = dict(
+    d0_melon=6, d0_wheat_seed=7, d0_cow=2, d0_sheep=1, d0_feed=20,
+    target_pastures=14, hire_target=14, min_reserve=60, land_free=8,
+    pr_plant=70, pr_collect=78, pr_care=72, pr_harvest_crop=80,
+    pr_build_pasture=88, seed_restock=3, wheat_hold_days=3,
+)
+try:
+    import json as _json
+    _pf = os.environ.get("KAGR_PARAMS")
+    if _pf and os.path.exists(_pf):
+        with open(_pf) as _fh:
+            P.update(_json.load(_fh))
+except Exception:
+    pass
+
 # ── try to load trained RL weights (optional; heuristic runs without them) ──
 _RL_POLICY = None
 try:
@@ -372,7 +391,7 @@ def build_tasks(scan, me, private, picks, free_cells, day, hour, board_size, tot
             tasks.append((cell,["FEED"],pr))
             total_wheat -= 1
     for cell in scan["harvest_urgent"]: tasks.append((cell,["HARVEST"],95))
-    for cell in scan["harvest_crop"]: tasks.append((cell,["HARVEST"],80))
+    for cell in scan["harvest_crop"]: tasks.append((cell,["HARVEST"],P["pr_harvest_crop"]))
     for cell in scan["harvest_animal"]: tasks.append((cell,["HARVEST"],75))
     shed=private.get("shed") or {}
     placeable=[(cell,kind) for cell,kind in scan["structures_empty"]]
@@ -389,22 +408,22 @@ def build_tasks(scan, me, private, picks, free_cells, day, hour, board_size, tot
     for kind,name in picks:
         if ci>=len(free_cells): break
         if kind=="PLANT" and seeds.get(name,0)>0:
-            tasks.append((free_cells[ci],["PLANT",name],70))
+            tasks.append((free_cells[ci],["PLANT",name],P["pr_plant"]))
             seeds=dict(seeds); seeds[name]-=1; ci+=1
         elif kind=="ANIMAL":
             tasks.append((free_cells[ci],[ANIMAL_SPECS[name]["build"]],65)); ci+=1
-    for cell in scan["collect"]: tasks.append((cell,["COLLECT_FERTILIZER"],78))
+    for cell in scan["collect"]: tasks.append((cell,["COLLECT_FERTILIZER"],P["pr_collect"]))
     if day<total_days-2:
         for cell in scan["weeds"]: tasks.append((cell,["DIG"],40))
-    for cell in scan["care"]: tasks.append((cell,["CARE"],72))
+    for cell in scan["care"]: tasks.append((cell,["CARE"],P["pr_care"]))
     # Build PASTUREs on free tiles (top-player strategy: expand animal housing)
     n_pastures = sum(1 for row in (me.get("tiles") or []) for t in row if isinstance(t,dict) and t.get("kind") in ("COOP","PASTURE"))
     if day < total_days - 10:
-        target_pastures = 6 if day < 5 else 14
+        target_pastures = 6 if day < 5 else P["target_pastures"]
         needed = target_pastures - n_pastures
         if needed > 0:
             for cell in free_cells[:needed]:
-                tasks.append((cell, ["BUILD_PASTURE"], 88))
+                tasks.append((cell, ["BUILD_PASTURE"], P["pr_build_pasture"]))
     n_fert = int((private.get("shed") or {}).get("FERTILIZER", 0))
     for iv in (private.get("inventories") or []):
         n_fert += int((iv or {}).get("FERTILIZER", 0))
@@ -494,7 +513,7 @@ def _build_market_orders(obs, picks, scan, total_days=30):
     orders+=plan_sells(shed,minv,day,hour,total_days,hold); money_l=money
 
     # 1. Aggressive wheat buy for animal feed (buy in bulk)
-    if animals and int(shed.get("WHEAT",0)) < animals*3 and day < total_days-1:
+    if animals and int(shed.get("WHEAT",0)) < animals*P["wheat_hold_days"] and day < total_days-1:
         # Buy 40 units at a time if we have enough money, else try smaller
         for batch in [80, 40, 20, 10, 5, 2]:
             c,_=buy_cost("WHEAT",minv.get("WHEAT",10000),batch)
@@ -510,7 +529,7 @@ def _build_market_orders(obs, picks, scan, total_days=30):
         # Labour is cheap: HIRE costs fib(n) per extra hand that day, so a crew of
         # 10 is only ~143 total and 14 is ~986. Hands vanish nightly, so re-hire a
         # full crew every day -- idle tiles and unharvested produce cost far more.
-        target_hands = 5 if day == 0 else 14
+        target_hands = 5 if day == 0 else P["hire_target"]
         
         hires_needed = target_hands - total_hands
         if hires_needed > 0:
@@ -519,7 +538,7 @@ def _build_market_orders(obs, picks, scan, total_days=30):
                 c=_FIB[min(hires,len(_FIB)-1)]
                 # Keep only a token reserve. A large one blocks hiring entirely on
                 # low-cash days, which strands the whole farm for lack of labour.
-                min_reserve = 60
+                min_reserve = P["min_reserve"]
                 if money_l > c + min_reserve: orders.append(["HIRE"]); money_l-=c; hires+=1
                 else: break
 
@@ -530,12 +549,12 @@ def _build_market_orders(obs, picks, scan, total_days=30):
         # MELON funds the mid-game (harvests ~D10), but do NOT spend down to
         # near-zero for a bigger blitz: wages go unpaid, the crew dies, and the
         # farm stalls for 15 days. 6 melons + a cash buffer beats 12 + no buffer.
-        orders.append(["BUY_SEED","MELON",6]); money_l-=6*CROP_SPECS["MELON"]["seed"]
-        orders.append(["BUY_SEED","WHEAT",7]); money_l-=7*CROP_SPECS["WHEAT"]["seed"]
-        orders.append(["BUY_ANIMAL","COW",2]); money_l-=2*ANIMAL_SPECS["COW"]["cost"]
-        orders.append(["BUY_ANIMAL","SHEEP",1]); money_l-=ANIMAL_SPECS["SHEEP"]["cost"]
-        c,_=buy_cost("WHEAT",minv.get("WHEAT",10000),20)
-        orders.append(["BUY_PRODUCT","WHEAT",20]); money_l-=c
+        orders.append(["BUY_SEED","MELON",P["d0_melon"]]); money_l-=P["d0_melon"]*CROP_SPECS["MELON"]["seed"]
+        orders.append(["BUY_SEED","WHEAT",P["d0_wheat_seed"]]); money_l-=P["d0_wheat_seed"]*CROP_SPECS["WHEAT"]["seed"]
+        orders.append(["BUY_ANIMAL","COW",P["d0_cow"]]); money_l-=P["d0_cow"]*ANIMAL_SPECS["COW"]["cost"]
+        orders.append(["BUY_ANIMAL","SHEEP",P["d0_sheep"]]); money_l-=P["d0_sheep"]*ANIMAL_SPECS["SHEEP"]["cost"]
+        c,_=buy_cost("WHEAT",minv.get("WHEAT",10000),P["d0_feed"])
+        orders.append(["BUY_PRODUCT","WHEAT",P["d0_feed"]]); money_l-=c
 
     # 4. Fill empty structures with animals every day
     min_reserve = 300 if (day > 2 and hires >= 4) else 0
@@ -589,7 +608,7 @@ def _build_market_orders(obs, picks, scan, total_days=30):
     # 6. Buy land when farm is full (top players unlock all 4 quadrants)
     if len(quadrants)<4 and day<total_days-8:
         lc=_land_cost(me)
-        if len(free_cells)<8 and money_l>lc+500: orders.append(["BUY_LAND"]); money_l-=lc
+        if len(free_cells)<P["land_free"] and money_l>lc+500: orders.append(["BUY_LAND"]); money_l-=lc
 
     return orders[:10]
 
