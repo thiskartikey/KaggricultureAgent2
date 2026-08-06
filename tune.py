@@ -23,10 +23,13 @@ TRAIN_SEEDS = [7, 42, 101, 202, 303]
 HOLDOUT_SEEDS = [404, 505, 606, 707]
 
 BASE = dict(
-    d0_melon=6, d0_wheat_seed=7, d0_cow=2, d0_sheep=1, d0_feed=20,
-    target_pastures=14, hire_target=14, min_reserve=60, land_free=8,
+    d0_melon=6, d0_wheat_seed=7, d0_cow=2, d0_sheep=2, d0_feed=10,
+    target_pastures=8, hire_target=8, min_reserve=60, land_free=8,
     pr_plant=70, pr_collect=78, pr_care=72, pr_harvest_crop=80,
-    pr_build_pasture=88, seed_restock=3, wheat_hold_days=3,
+    pr_build_pasture=88, seed_restock=3, wheat_hold_days=2,
+    pr_water=100, pr_water_urgent=120, pr_feed=105, pr_feed_urgent=115,
+    budget_frac=60, reserve_scale=100, crop_decay=85, melon_bias=100,
+    d0_hire=5,
 )
 
 # Values to try per knob. Ordered widest-impact first so early rounds matter most.
@@ -45,6 +48,14 @@ GRID = {
     "pr_build_pasture":[74, 88, 96],
     "land_free":      [5, 8, 12],
     "min_reserve":    [0, 60, 200],
+    # widened levers
+    "reserve_scale":  [60, 80, 100, 130],
+    "melon_bias":     [100, 150, 250, 400],
+    "crop_decay":     [70, 85, 95, 99],
+    "budget_frac":    [40, 60, 85, 110],
+    "pr_water":       [90, 100, 112],
+    "pr_feed":        [80, 105, 118],
+    "d0_hire":        [3, 5, 8],
 }
 
 RUNNER = r'''
