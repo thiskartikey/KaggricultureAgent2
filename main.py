@@ -10,10 +10,15 @@ import math, os
 # offline tuner overrides them via KAGR_PARAMS=<file.json>; when that env var is
 # absent -- as in a real submission -- these values are used unchanged.
 P = dict(
-    d0_melon=6, d0_wheat_seed=7, d0_cow=2, d0_sheep=1, d0_feed=20,
-    target_pastures=14, hire_target=14, min_reserve=60, land_free=8,
-    pr_plant=70, pr_collect=78, pr_care=72, pr_harvest_crop=80,
-    pr_build_pasture=88, seed_restock=3, wheat_hold_days=3,
+    d0_melon=6, d0_wheat_seed=7, d0_cow=2,
+    d0_sheep=2, d0_feed=10,
+    # Tuned down from 14/14: a big herd consumed the land and hand-turns the
+    # crop engine needed. Halving both raised holdout mean 10,654 -> 58,921.
+    target_pastures=8, hire_target=8,
+    min_reserve=60, land_free=8,
+    pr_plant=70, pr_collect=78, pr_care=72,
+    pr_harvest_crop=80, pr_build_pasture=88,
+    seed_restock=3, wheat_hold_days=2,
 )
 try:
     import json as _json
