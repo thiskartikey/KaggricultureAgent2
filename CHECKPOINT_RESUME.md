@@ -1,11 +1,33 @@
 # Kagriculture Agent — Resume Checkpoint
 
 > **Updated**: 2026-08-07
-> **Status**: ✅ Agent rewritten (v5) and verified. Submission tarball built. Not yet uploaded.
+> **Status**: ✅ v7 built, verified, and pushed. v5 was submitted to Kaggle live
+> (see §7b/7c for the live-match results) — v7 supersedes it and is not yet
+> submitted.
 > **Previous checkpoint** (now superseded, its premises were wrong): `versions/archive/CHECKPOINT_RESUME_20260807_pre-v5.md`
 
 **If you are a fresh agent picking this up: read this whole file first. It is
 self-contained. Do not trust `instructions/environment.md` — see §7.**
+
+---
+
+## 0. Repository
+
+This repo is pushed to GitHub: **https://github.com/gytdrop/KaggricultureAgent**
+(branch `main`). Full commit history, including every version referenced below
+as `versions/heuristic_vN.py`, lives there — clone or `git log` it instead of
+re-deriving history from file timestamps.
+
+```bash
+git remote -v          # origin -> github.com/gytdrop/KaggricultureAgent.git
+git log --oneline       # commit history
+```
+
+`downloads/` (2.3 GB of replay JSONs, §3) and `.agents/` are gitignored and
+**not** on GitHub — only `versions/` (small, code) is tracked for history.
+See `instructions/git.md` for the commit/push workflow, including the trap
+that `git add -A` stages the entire replay corpus and will be rejected by
+GitHub on size.
 
 ---
 
