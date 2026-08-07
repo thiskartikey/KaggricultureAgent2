@@ -23,3 +23,8 @@ __pycache__/
 
 # tuner output
 tuning/
+
+# replay data — 2.3GB of downloaded episode JSONs, never commit these
+downloads/
+# orchestrator scratch
+.agents/

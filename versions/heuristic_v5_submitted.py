@@ -313,15 +313,10 @@ def _scan(me, day, total_days=30):
                     if not t.get("fed_today"):
                         out["feed"].append((x, y))
                     if _animal_pending(t) is not None:
-                        # EVERY unfed animal is tier-0 work, not just the ones
-                        # about to starve.  The care bonus banks only when an
-                        # animal is cared AND fed on the same day, and it
-                        # accumulates, so a skipped feed does not merely delay a
-                        # meal -- it voids that day's care and cuts the next
-                        # yield.  Worth +18,184 (24/24) once the farm was
-                        # compacted; before that it LOST 11,018, because feeding
-                        # a scattered farm stole the crew from urgent watering.
-                        if not t.get("fed_today"):
+                        # Starving animals jump the queue; routine upkeep
+                        # (harvest/collect/care) queues behind the watering.
+                        if (not t.get("fed_today")
+                                and int(t.get("consecutive_unfed", 0)) >= 1):
                             out["service"].append((x, y))
                         else:
                             out["service_soon"].append((x, y))
@@ -463,13 +458,10 @@ def _seed_targets(day, total_days, planted, free_n):
             0, min(TARGET_STRAWBERRY - planted.get("STRAWBERRY", 0),
                    free_n - want["MELON"]))
     if left >= 5:
-        # Wheat backfills every tile the cash crops do not claim, and we keep a
-        # standing order rather than importing feed: a 10-coin seed returns 4-6
-        # units (~2/unit) against ~37 to buy the same wheat off the market.
-        # Measured at +5,964 (p=0.000, 16/20) against the version that bought
-        # its feed -- see the live-game cost analysis in CHECKPOINT_RESUME.md.
+        # Wheat backfills every tile the cash crops do not claim; leaving land
+        # fallow was costing more than the seed ever could.
         rest = free_n - want.get("MELON", 0) - want.get("STRAWBERRY", 0)
-        want["WHEAT"] = max(8, min(max(0, rest), 30))
+        want["WHEAT"] = max(4, min(max(0, rest), 25))
     return want
 
 
@@ -856,13 +848,6 @@ def _agent(obs, total_days=30):
 
     scan = _scan(me, day, total_days)
     free_cells = _free_cells(me, board)
-    # Claim land from the shed outwards.  Row-major order scattered pastures to
-    # the far corners of the map, and feeding costs a shed round-trip per
-    # animal, so a compact farm shortens the single most frequent walk on the
-    # board.  Worth +17,521 (24/24, p=0.000) on its own -- walking, not
-    # strategy, was the binding constraint.
-    _sheds = shed_adjacent_cells(board, me)
-    free_cells.sort(key=lambda c: min(manhattan(c, s) for s in _sheds))
 
     orders = _make_market_orders(obs, player, total_days)
     tasks = _build_tasks(scan, me, private, free_cells, day, total_days, hour)

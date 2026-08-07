@@ -219,13 +219,9 @@ def plan_sells(shed, market_inv, day, hour, total_days, hold=None):
     return orders
 
 
-def feed_hold(animal_count, shed_wheat, days_buffer=3):
-    """Wheat we refuse to sell because the animals eat it.
-
-    An escaped animal costs its 400-500 price plus every yield it had left, so
-    a few days of feed in reserve is far cheaper than running the stock to zero.
-    """
-    return min(shed_wheat, min(45, animal_count * days_buffer))
+def feed_hold(animal_count, shed_wheat, days_buffer=2):
+    """Wheat we refuse to sell because the animals eat it."""
+    return min(shed_wheat, min(40, animal_count * days_buffer))
 
 
 # ── Farm scan ─────────────────────────────────────────────────────────────────
@@ -313,15 +309,10 @@ def _scan(me, day, total_days=30):
                     if not t.get("fed_today"):
                         out["feed"].append((x, y))
                     if _animal_pending(t) is not None:
-                        # EVERY unfed animal is tier-0 work, not just the ones
-                        # about to starve.  The care bonus banks only when an
-                        # animal is cared AND fed on the same day, and it
-                        # accumulates, so a skipped feed does not merely delay a
-                        # meal -- it voids that day's care and cuts the next
-                        # yield.  Worth +18,184 (24/24) once the farm was
-                        # compacted; before that it LOST 11,018, because feeding
-                        # a scattered farm stole the crew from urgent watering.
-                        if not t.get("fed_today"):
+                        # Starving animals jump the queue; routine upkeep
+                        # (harvest/collect/care) queues behind the watering.
+                        if (not t.get("fed_today")
+                                and int(t.get("consecutive_unfed", 0)) >= 1):
                             out["service"].append((x, y))
                         else:
                             out["service_soon"].append((x, y))
@@ -463,13 +454,10 @@ def _seed_targets(day, total_days, planted, free_n):
             0, min(TARGET_STRAWBERRY - planted.get("STRAWBERRY", 0),
                    free_n - want["MELON"]))
     if left >= 5:
-        # Wheat backfills every tile the cash crops do not claim, and we keep a
-        # standing order rather than importing feed: a 10-coin seed returns 4-6
-        # units (~2/unit) against ~37 to buy the same wheat off the market.
-        # Measured at +5,964 (p=0.000, 16/20) against the version that bought
-        # its feed -- see the live-game cost analysis in CHECKPOINT_RESUME.md.
+        # Wheat backfills every tile the cash crops do not claim; leaving land
+        # fallow was costing more than the seed ever could.
         rest = free_n - want.get("MELON", 0) - want.get("STRAWBERRY", 0)
-        want["WHEAT"] = max(8, min(max(0, rest), 30))
+        want["WHEAT"] = max(4, min(max(0, rest), 25))
     return want
 
 
@@ -689,7 +677,7 @@ def _task_cell(task):
     return target
 
 
-def _assign_tasks(positions, tasks, invs, board, claims=None, feed_cells=None):
+def _assign_tasks(positions, tasks, invs, board, claims=None):
     """Tier-by-tier greedy nearest-pair matching, with sticky claims.
 
     Recomputing assignments from scratch every turn made workers oscillate:
@@ -721,12 +709,6 @@ def _assign_tasks(positions, tasks, invs, board, claims=None, feed_cells=None):
                 if TASK_TIER.get(t[0], 3) == tier and (t[0], _task_cell(t)) not in taken]
         if not pool:
             continue
-        # A hungry animal can only be fed by somebody actually holding wheat.
-        # Sending the merely-closest worker meant it arrived empty, did the
-        # care/collect chores instead, and left the animal to starve.
-        feed_cells = feed_cells or set()
-        have_wheat = any(int((invs[ui] if ui < len(invs) else {}).get("WHEAT", 0)) > 0
-                         for ui in free)
         pairs = []
         for ui in free:
             for t in pool:
@@ -734,15 +716,11 @@ def _assign_tasks(positions, tasks, invs, board, claims=None, feed_cells=None):
                 if cell is None:
                     continue
                 inv = invs[ui] if ui < len(invs) else {}
-                carrying = int(inv.get("WHEAT", 0)) > 0
                 if t[0] == "fertilize" and int(inv.get("FERTILIZER", 0)) <= 0:
                     continue      # only workers already carrying fertilizer
-                hungry = t[0] in ("service", "service_soon") and cell in feed_cells
-                if hungry and have_wheat and not carrying:
-                    continue      # let a worker with feed take this one
                 d = manhattan(positions[ui], cell)
-                if hungry and carrying:
-                    d -= 3
+                if t[0] in ("service", "service_soon") and int(inv.get("WHEAT", 0)) > 0:
+                    d -= 3        # a worker holding feed is the right one to send
                 pairs.append((d, ui, (t[0], cell), t))
         pairs.sort(key=lambda p: (p[0], p[1]))
         for d, ui, key, t in pairs:
@@ -856,13 +834,6 @@ def _agent(obs, total_days=30):
 
     scan = _scan(me, day, total_days)
     free_cells = _free_cells(me, board)
-    # Claim land from the shed outwards.  Row-major order scattered pastures to
-    # the far corners of the map, and feeding costs a shed round-trip per
-    # animal, so a compact farm shortens the single most frequent walk on the
-    # board.  Worth +17,521 (24/24, p=0.000) on its own -- walking, not
-    # strategy, was the binding constraint.
-    _sheds = shed_adjacent_cells(board, me)
-    free_cells.sort(key=lambda c: min(manhattan(c, s) for s in _sheds))
 
     orders = _make_market_orders(obs, player, total_days)
     tasks = _build_tasks(scan, me, private, free_cells, day, total_days, hour)
@@ -880,10 +851,10 @@ def _agent(obs, total_days=30):
     # free if we do it now.  Grabbing wheat later costs a round trip that used
     # to eat the first ten hours of the day.
     need_feed = len(scan["feed"])
-    if hour <= 6 and need_feed > 0 and shed_wheat > 0:
+    if hour <= 3 and need_feed > 0 and shed_wheat > 0:
         carried = sum(int((invs[i] if i < len(invs) else {}).get("WHEAT", 0))
                       for i in range(len(positions)))
-        budget = min(shed_wheat, need_feed + 4 - carried)
+        budget = min(shed_wheat, need_feed + 2 - carried)
         for i, pos in enumerate(positions):
             if budget <= 0:
                 break
@@ -921,8 +892,7 @@ def _agent(obs, total_days=30):
 
     prev = _claims_for(player, step, len(positions))
     local_prev = {li: prev[gi] for li, gi in enumerate(free_units) if gi in prev}
-    assignment = _assign_tasks(free_positions, tasks, free_invs, board, local_prev,
-                               set(scan["feed"]))
+    assignment = _assign_tasks(free_positions, tasks, free_invs, board, local_prev)
 
     claims = {}
     for local_i, task in assignment.items():
