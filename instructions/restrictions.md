@@ -10,9 +10,8 @@ To ensure consistency and prevent corruption of files in this repository, all AI
 
 ## Development & Code Guidelines
 
-1. **Stdout Cleanliness**: The Kaggle environment communicates with the agent using standard input/output. Never add arbitrary print statements (`print()`) to files intended for submission (`ml_main.py`, `env_wrapper.py`, `heuristic.py`, `rl_inference.py`). Only structured/expected stdout is allowed.
-2. **Environment Wrapper Integrity**: Do not modify `env_wrapper.py` unless you are adding verified features for feature engineering or observation extraction. Make sure to update the training/inference steps accordingly.
-3. **Weights Preservation**: Do not overwrite `rl_weights.npz` with untrained or broken weights. Always backup weights before running fresh training sessions.
+1. **Stdout Cleanliness**: The Kaggle environment communicates with the agent using standard input/output. Never add arbitrary print statements (`print()`) to files intended for submission (`ml_main.py` and `heuristic.py`). Only structured/expected stdout is allowed.
+2. **Legacy RL Code**: The RL path (`env_wrapper.py`, `rl_inference.py`, `rl_weights.npz`) has been archived in `versions/`. Do not restore or use these unless explicitly reviving the RL model.
 
 ## File Cleanup Restrictions
 

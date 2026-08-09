@@ -3,10 +3,7 @@ import os
 
 files_to_add = [
     ("ml_main.py", "main.py"),  # rename to main.py inside the tar
-    ("env_wrapper.py", "env_wrapper.py"),
     ("heuristic.py", "heuristic.py"),
-    ("rl_inference.py", "rl_inference.py"),
-    ("rl_weights.npz", "rl_weights.npz")
 ]
 
 with tarfile.open("ml_submission.tar.gz", "w:gz") as tar:

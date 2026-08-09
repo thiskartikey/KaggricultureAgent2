@@ -18,14 +18,12 @@ Kaggle requires the entrypoint script to be named `main.py`. The build script ma
 
 | Local Source File | Tar Destination Path | Purpose |
 | :--- | :--- | :--- |
-| `ml_main.py` | `main.py` | Main agent loop entrypoint |
-| `env_wrapper.py` | `env_wrapper.py` | Vectorization & wrappers |
-| `heuristic.py` | `heuristic.py` | Heuristics & market pricing fallback |
-| `rl_inference.py` | `rl_inference.py` | Zero-dependency neural net loader |
-| `rl_weights.npz` | `rl_weights.npz` | PPO model weights |
+| `ml_main.py` | `main.py` | Main agent entrypoint |
+| `heuristic.py` | `heuristic.py` | Pure heuristic strategy engine |
 
 ## Kaggle Environment Constraints
 
-1. **Zero-Dependency Inference**: Submissions run on Kaggle sandboxes without internet access or GPU acceleration. You cannot import `stable-baselines3` or `torch` during evaluation. The policy uses pure numpy matrix multiplications via `rl_inference.py`.
-2. **File References**: The Kaggle agent loader extracts and runs the tarball in a temporary directory. Dynamic path handling is implemented in `main.py` to load `rl_weights.npz` relative to `__file__`.
-3. **Execution Limits**: The agent must return actions within the game's time limit per step (typically 1 second). Do not add slow calculations or search algorithms to the step loop.
+1. **Zero-Dependency Heuristics**: The submission package is purely rule-based and requires no heavy machine learning dependencies (e.g. PyTorch, stable-baselines3), allowing it to fit into an ultra-lightweight ~11 KB archive.
+2. **Execution Limits**: The agent must return actions within the game's time limit per step (typically 1 second). The heuristic executes in ~2.4 ms per call, well within limits.
+3. **No stdout pollution**: Do not add print statements to `heuristic.py` or `ml_main.py` since stdout is reserved for sandbox execution communications.
+

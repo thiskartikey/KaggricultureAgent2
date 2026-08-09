@@ -2,28 +2,22 @@
 
 This document describes the design and internal workings of the Kaggriculture agent.
 
-## Dual Architecture: Hybrid RL & Heuristic
+## Core Architecture: Pure Heuristic Rule-Based Engine
 
-The agent uses a hybrid approach to maximize efficiency:
-1. **Reinforcement Learning Policy (PPO)**: Used for high-level macro planning (e.g., deciding which farmer is assigned to what role, scheduling major plants or pasture builds).
-2. **Rule-Based Heuristic**: Handles market trading (buying/selling wheat, carrots, tomatoes, animals, etc.) and low-level action validation.
+The current agent is a **pure heuristic rule-based strategy** implemented in [heuristic.py](file:///home/gytdrop/Documents/HACKATHONS/2026/kaggle/kagriculture/heuristic.py). Although the repository initially experimented with a hybrid RL/PPO model, the RL logic was retired after the pure heuristic achieved a massive score breakthrough (from 1.9k to ~123k+).
 
 ```mermaid
 graph TD
-    Obs[Raw Game Observation] --> Wrap[env_wrapper.py / obs_to_vec]
-    Wrap --> Policy{PPO Policy loaded?}
-    Policy -->|Yes| RL[rl_inference.py / RLPolicy]
-    Policy -->|No| Heur[heuristic.py fallback]
-    RL --> Action[Farmer Operations & Roles]
-    Heur --> Action
-    Action --> Market[heuristic.py Market & Restock trades]
-    Market --> Output[Output Action list to Game]
+    Obs[Raw Game Observation] --> Scan[heuristic.py / _scan]
+    Scan --> BuildTasks[heuristic.py / _build_tasks]
+    BuildTasks --> AssignTasks[heuristic.py / _assign_tasks]
+    AssignTasks --> MarketOrders[heuristic.py / _make_market_orders]
+    MarketOrders --> Output[Output Action dict to Game]
 ```
 
 ## Key Files & Roles
 
-- **`main.py` / `ml_main.py`**: The agent entrypoint. Initializes the game loop, parses observations, queries the RL policy or runs fallback heuristics, and outputs actions.
-- **`env_wrapper.py`**: Handles feature engineering. Converts the raw game observation dictionary into a standardized numeric vector (`obs_to_vec`) for the RL model, and translates RL action outputs back into farmer actions.
-- **`rl_inference.py`**: Defines the neural network architecture (`RLPolicy`) and handles loading weights from the `.npz` file.
-- **`rl_weights.npz`**: The saved weights of the trained PPO actor-critic network.
-- **`heuristic.py`**: Implements standard rule-based algorithms for crop rotations, feeding schedules, pasture planning, and optimal pricing/market mechanics.
+- **`ml_main.py` / `main.py`**: The agent entrypoint. Initializes the execution context and delegates step processing directly to the heuristic module.
+- **`heuristic.py`**: The entire strategy engine. Implements market pricing estimation, prioritized operational task queues, agricultural spatial compaction algorithms, and livestock feeding management.
+- **`versions/`**: Contains legacy archives of the old Reinforcement Learning files (such as `rl_inference_v0.py` and `rl_weights_v0.npz`) if you ever want to reference them.
+
