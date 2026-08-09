@@ -14,6 +14,7 @@ stdout*.log
 *.npz
 *.zip
 *.tar.gz
+*.pkl
 rl_checkpoints/
 rl_logs/
 rl_best/
