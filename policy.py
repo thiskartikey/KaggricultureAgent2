@@ -867,9 +867,50 @@ def _claims_for(player, step, n_units):
 def _store_claims(player, step, n_units, claims):
     _CLAIM_STATE[player] = {"step": step, "n_units": n_units, "claims": claims}
 
+def get_dt_task(act_id, pos, scan, free_cells):
+    harv_crops = scan.get("harvest_crop", [])
+    water = scan.get("water", []) + scan.get("water_soon", [])
+    weeds = scan.get("weeds", [])
+    feed_service = scan.get("service", []) + scan.get("service_soon", [])
+    
+    if act_id == 0:
+        c = _nearest(pos, harv_crops)
+        if c: return ("harvest_crop", c)
+        c = _nearest(pos, feed_service)
+        if c:
+            if c in scan.get("service", []):
+                return ("service", c)
+            return ("service_soon", c)
+    elif act_id == 1:
+        c = _nearest(pos, water)
+        if c:
+            if c in scan.get("water", []):
+                return ("water", c)
+            return ("water_soon", c)
+    elif act_id == 2:
+        c = _nearest(pos, free_cells)
+        if c: return ("plant", ("MELON", c))
+    elif act_id == 3:
+        c = _nearest(pos, free_cells)
+        if c: return ("plant", ("CARROT", c))
+    elif act_id == 4:
+        c = _nearest(pos, free_cells)
+        if c: return ("plant", ("WHEAT", c))
+    elif act_id == 5:
+        c = _nearest(pos, feed_service)
+        if c:
+            if c in scan.get("service", []):
+                return ("service", c)
+            return ("service_soon", c)
+    elif act_id == 6:
+        c = _nearest(pos, weeds)
+        if c: return ("weed", c)
+    return None
+
 
 def _agent(obs, total_days=30):
     player = obs["player"]
+    me = obs["farms"][player]
     day = int(obs.get("day", 0))
     hour = int(obs.get("hour", 0))
     step = int(obs.get("step", day * 24 + hour))
@@ -941,20 +982,89 @@ def _agent(obs, total_days=30):
             ops_out[i] = _unit_op(pos, ("dropoff", None), private, i,
                                   board, me, shed_wheat)
 
+    # ── DT Query ─────────────────────────────────────────────────────────────
+    dt_task = None
+    global DT_MODEL, STATE_HISTORY, ACTION_HISTORY, RETURN_HISTORY, TIMESTEP_HISTORY
+    
+    if day == 0 and hour == 0:
+        STATE_HISTORY = []
+        ACTION_HISTORY = []
+        RETURN_HISTORY = []
+        TIMESTEP_HISTORY = []
+        
+    import os
+    import numpy as np
+    
+    weights_file = "rl_weights.npz"
+    if DT_MODEL is None and os.path.exists(weights_file):
+        try:
+            DT_MODEL = DecisionTransformer(weights_file)
+        except Exception:
+            pass
+            
+    if DT_MODEL is not None and DT_MODEL.loaded:
+        try:
+            s_t = obs_to_vec(obs, player)
+            money = float(me.get("money", 0.0))
+            r_t = max(0.0, 200000.0 - money)
+            
+            STATE_HISTORY.append(s_t)
+            RETURN_HISTORY.append([r_t])
+            TIMESTEP_HISTORY.append(day * 24 + hour)
+            
+            if len(ACTION_HISTORY) < len(STATE_HISTORY):
+                dummy_a = np.zeros(8, dtype=np.float32)
+                dummy_a[7] = 1.0 # PASS
+                ACTION_HISTORY.append(dummy_a)
+                
+            K = 20
+            states_k = np.array(STATE_HISTORY[-K:], dtype=np.float32)
+            actions_k = np.array(ACTION_HISTORY[-K:], dtype=np.float32)
+            returns_k = np.array(RETURN_HISTORY[-K:], dtype=np.float32)
+            timesteps_k = np.array(TIMESTEP_HISTORY[-K:], dtype=np.int64)
+            
+            act_id = DT_MODEL.predict(states_k, actions_k, returns_k, timesteps_k)
+            
+            chosen_a = np.zeros(8, dtype=np.float32)
+            chosen_a[act_id] = 1.0
+            ACTION_HISTORY[-1] = chosen_a
+            
+            dummy_next = np.zeros(8, dtype=np.float32)
+            dummy_next[7] = 1.0
+            ACTION_HISTORY.append(dummy_next)
+            
+            dt_task = get_dt_task(act_id, positions[0], scan, free_cells)
+        except Exception:
+            pass
+
+    # ── Task Assignment ──────────────────────────────────────────────────────
+
     free_units = [i for i in range(len(positions)) if ops_out[i] is None]
-    free_positions = [positions[i] for i in free_units]
-    free_invs = [invs[i] if i < len(invs) else {} for i in free_units]
-
+    
+    dt_assigned_task = None
+                    
+    assign_units = list(free_units)
+    if dt_assigned_task is not None:
+        assign_units.remove(0)
+        
+    assign_positions = [positions[i] for i in assign_units]
+    assign_invs = [invs[i] if i < len(invs) else {} for i in assign_units]
+    
     prev = _claims_for(player, step, len(positions))
-    local_prev = {li: prev[gi] for li, gi in enumerate(free_units) if gi in prev}
-    assignment = _assign_tasks(free_positions, tasks, free_invs, board, local_prev,
+    local_prev = {li: prev[gi] for li, gi in enumerate(assign_units) if gi in prev}
+    assignment = _assign_tasks(assign_positions, tasks, assign_invs, board, local_prev,
                                set(scan["feed"]))
-
+                               
     claims = {}
     for local_i, task in assignment.items():
-        gi = free_units[local_i]
+        gi = assign_units[local_i]
         claims[gi] = task
         ops_out[gi] = _unit_op(positions[gi], task, private, gi, board, me, shed_wheat)
+        
+    if dt_assigned_task is not None:
+        claims[0] = dt_assigned_task
+        ops_out[0] = _unit_op(positions[0], dt_assigned_task, private, 0, board, me, shed_wheat)
+        
     _store_claims(player, step, len(positions), claims)
 
     # Idle units carrying goods walk them back to the shed instead of passing.
@@ -994,14 +1104,185 @@ def _total_days(config):
     return 30
 
 
-# ── Compat exports (used by env_wrapper.py) ───────────────────────────────────
-def plan_portfolio(day, total_days, money, free_tiles, seeds):
-    """Legacy compat -- the blueprint strategy plans per-tile instead."""
-    return []
+# ── Decision Transformer State and Actions Helper ─────────────────────────────
+DT_MODEL = None
+STATE_HISTORY = []
+ACTION_HISTORY = []
+RETURN_HISTORY = []
 
+OBS_DIM = 107
+CROPS    = ["WHEAT","CARROT","TOMATO","STRAWBERRY","MELON"]
+ANIMALS  = ["GOOSE","COW","SHEEP"]
+PRODUCTS = ["WHEAT","CARROT","TOMATO","STRAWBERRY","MELON","EGG","MILK","WOOL","FERTILIZER"]
+BASE_PRICES = [25, 35, 60, 120, 250, 50, 160, 200, 100]
+SHOPS = ["BAKERY","PIZZA_SHOP","BRUNCH_SPOT","YARN_STORE","ICE_CREAM_SHOP",
+         "PET_CAFE","SMOOTHIE_SHOP","FARMERS_MARKET"]
 
-def _count_animals_compat(me, private=None):
-    return _count_animals(me, private)
+def _norm_shop(s):
+    return str(s).strip().upper().replace(" ","_").replace("-","_")
+
+def _farm_summary(tiles, day):
+    import numpy as np
+    cv = np.zeros(20, np.float32)
+    av = np.zeros(9,  np.float32)
+    for y, row in enumerate(tiles):
+        for x, t in enumerate(row):
+            if not isinstance(t, dict):
+                continue
+            k = t.get("kind")
+            if k == "PLANT":
+                c = t.get("crop")
+                if c in CROPS:
+                    ci = CROPS.index(c)
+                    cv[ci*4]   += 1
+                    cv[ci*4+1] += int(not t.get("watered_today",False))
+                    cv[ci*4+2] += int(t.get("yield_units",0) > 0)
+                    cv[ci*4+3] += max(0, day - t.get("planted_day",day)) / 30.0
+            elif k in ("COOP","PASTURE"):
+                a = t.get("animal")
+                if a in ANIMALS:
+                    ai = ANIMALS.index(a)
+                    av[ai*3]   += 1
+                    av[ai*3+1] += int(not t.get("fed_today",False))
+                    av[ai*3+2] += int(t.get("yield_units",0) > 0)
+    return cv, av
+
+def obs_to_vec(obs, player):
+    import numpy as np
+    v = np.zeros(OBS_DIM, np.float32)
+    me  = obs["farms"][player]
+    opp = obs["farms"][1-player]
+    day  = obs.get("day",0)
+    hour = obs.get("hour",0)
+    priv = obs.get("private",{}) or {}
+    mkt  = obs.get("market",{}) or {}
+    town = obs.get("town",{}) or {}
+
+    i = 0
+    v[i] = day / 30.0;   i+=1
+    v[i] = hour / 24.0;  i+=1
+    v[i] = min(me.get("money",0) / 50000.0, 1.0); i+=1
+    v[i] = len(me.get("unlocked_quadrants",["NW"])) / 4.0; i+=1
+
+    tiles = me.get("tiles") or []
+    cv, av = _farm_summary(tiles, day)
+    v[i:i+20] = cv / 10.0;  i+=20
+    v[i:i+9]  = av / 10.0;  i+=9
+
+    fx, fy = me.get("farmer", [4,4])
+    v[i] = fx/10.0; v[i+1] = fy/10.0; i+=2
+
+    minv = mkt.get("inventory",{}) or {}
+    mprc = mkt.get("prices",{}) or {}
+    for j,p in enumerate(PRODUCTS):
+        v[i+j] = min(mprc.get(p, BASE_PRICES[j]) / (BASE_PRICES[j]*2), 1.0)
+    i+=9
+    for j,p in enumerate(PRODUCTS):
+        v[i+j] = min(minv.get(p,10000) / 10000.0, 1.0)
+    i+=9
+
+    shed = priv.get("shed",{}) or {}
+    seeds = priv.get("seeds",{}) or {}
+    for j,p in enumerate(PRODUCTS):
+        v[i+j] = min(shed.get(p,0) / 20.0, 1.0)
+    i+=9
+    for j,a in enumerate(ANIMALS):
+        v[i+j] = min(shed.get(a,0) / 5.0, 1.0)
+    i+=3
+
+    for j,c in enumerate(CROPS):
+        v[i+j] = min(seeds.get(c,0) / 10.0, 1.0)
+    i+=5
+
+    shops_u = {_norm_shop(s) for s in (town.get("unlocked_shops") or [])}
+    for j,s in enumerate(SHOPS):
+        v[i+j] = float(s in shops_u)
+    i+=8
+
+    opp_tiles = opp.get("tiles") or []
+    ocv, oav = _farm_summary(opp_tiles, day)
+    v[i:i+20] = ocv / 10.0; i+=20
+    v[i:i+9]  = oav / 10.0; i+=9
+
+    return v
+
+def _step_toward(pos, target):
+    x,y = pos; tx,ty = target
+    dx,dy = tx-x, ty-y
+    if dx==0 and dy==0: return None
+    if abs(dx)>=abs(dy): return "EAST" if dx>0 else "WEST"
+    return "SOUTH" if dy>0 else "NORTH"
+
+def _nearest(pos, cells):
+    if not cells: return None
+    return min(cells, key=lambda c: abs(c[0]-pos[0])+abs(c[1]-pos[1]))
+
+def macro_to_farmer_op(action_id, obs, player, seeds_override=None):
+    me    = obs["farms"][player]
+    priv  = obs.get("private",{}) or {}
+    seeds = seeds_override or priv.get("seeds",{}) or {}
+    tiles = me.get("tiles") or []
+    n     = len(tiles)
+    pos   = tuple(me.get("farmer",[4,4]))
+    day   = obs.get("day",0)
+
+    harv, water, empty, weeds, feed = [],[],[],[],[]
+    for y in range(n):
+        for x in range(n):
+            t = tiles[y][x]
+            if t=="LOCKED": continue
+            if t is None: empty.append((x,y)); continue
+            if not isinstance(t,dict): continue
+            k = t.get("kind")
+            if k=="PLANT":
+                if t.get("yield_units",0)>0: harv.append((x,y))
+                if not t.get("watered_today",False): water.append((x,y))
+            elif k=="WEED": weeds.append((x,y))
+            elif k in ("COOP","PASTURE") and t.get("animal"):
+                if not t.get("fed_today",False): feed.append((x,y))
+                if t.get("yield_units",0)>0: harv.append((x,y))
+
+    def _go(cells, act):
+        t = _nearest(pos, cells)
+        if t is None: return ["PASS"]
+        if tuple(pos)==tuple(t): return [act]
+        st = _step_toward(pos,t)
+        return [st] if st else [act]
+
+    crop_map = {2:"MELON",3:"CARROT",4:"WHEAT"}
+    if action_id == 0: return _go(harv, "HARVEST")
+    if action_id == 1: return _go(water, "WATER")
+    if action_id in (2,3,4):
+        crop = crop_map[action_id]
+        if seeds.get(crop,0)>0 and day<=26:
+            return _go(empty, f"__PLANT__{crop}")
+        return ["PASS"]
+    if action_id == 5: return _go(feed, "FEED")
+    if action_id == 6: return _go(weeds, "DIG")
+    return ["PASS"]
+
+def resolve_farmer_op(raw_op, obs, player, priv):
+    if not raw_op or raw_op[0]=="PASS": return ["PASS"]
+    op = raw_op[0]
+    if op.startswith("__PLANT__"):
+        crop = op[9:]
+        me = obs["farms"][player]
+        tiles = me.get("tiles") or []
+        pos = tuple(me.get("farmer",[4,4]))
+        x,y = pos
+        t = tiles[y][x] if 0<=y<len(tiles) and 0<=x<len(tiles[y]) else "LOCKED"
+        if t is None:
+            return ["PLANT", crop]
+        empty=[]
+        for ry in range(len(tiles)):
+            for rx in range(len(tiles[ry])):
+                if tiles[ry][rx] is None: empty.append((rx,ry))
+        tgt = _nearest(pos, empty)
+        if tgt is None: return ["PASS"]
+        if tuple(pos)==tgt: return ["PLANT", crop]
+        st = _step_toward(pos, tgt)
+        return [st] if st else ["PASS"]
+    return raw_op
 
 
 # ── Decision Transformer Inference (NumPy) ────────────────────────────────────
@@ -1060,7 +1341,7 @@ class DecisionTransformer:
         out = (probs @ v).transpose(1, 0, 2).reshape(seq_len, embed_dim)
         return self._linear(out, f'blocks.{layer_idx}.attn.c_proj.weight', f'blocks.{layer_idx}.attn.c_proj.bias')
 
-    def predict(self, states, actions, returns_to_go):
+    def predict(self, states, actions, returns_to_go, timesteps):
         """
         Forward pass for causal transformer.
         Expects sequences of shape (K, dim). Returns logits for next action.
@@ -1088,8 +1369,7 @@ class DecisionTransformer:
         seq[2::3] = a_emb # The last action is a dummy, but we only care about the state representation
         
         # Positional embedding
-        positions = np.arange(K)
-        pos_emb = self._w['embed_timestep.weight'][positions]
+        pos_emb = self._w['embed_timestep.weight'][timesteps]
         pos_emb_interleaved = np.repeat(pos_emb, 3, axis=0)
         
         x = seq + pos_emb_interleaved
@@ -1113,6 +1393,7 @@ class DecisionTransformer:
         state_tokens = x[1::3]
         logits = self._linear(state_tokens[-1:], 'predict_action.weight', 'predict_action.bias')
         return int(np.argmax(logits[0]))
+
 
 
 # ── Entrypoint function (MUST be the last top-level function defined) ────────
