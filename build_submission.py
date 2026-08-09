@@ -3,7 +3,7 @@ import os
 
 files_to_add = [
     ("ml_main.py", "main.py"),  # rename to main.py inside the tar
-    ("heuristic.py", "heuristic.py"),
+    ("policy.py", "policy.py"),
 ]
 
 with tarfile.open("ml_submission.tar.gz", "w:gz") as tar:
