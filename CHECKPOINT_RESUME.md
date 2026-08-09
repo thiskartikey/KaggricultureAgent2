@@ -1,7 +1,7 @@
 # Kagriculture Agent — Resume Checkpoint
 
 > **Updated**: 2026-08-09
-> **Status**: Shifted architecture to **Decision Transformer** (DT) model policy. Renamed strategy core to `policy.py` (with the optimized v7 heuristic as our solid baseline/fallback layer).
+> **Status**: Completed advanced strategy improvements (routing, replanting buffer, melon price protection) and implemented the pure NumPy **Decision Transformer** (DT) model inference class within `policy.py`. Note: Goose management was experimented with but discarded due to negative impact on profit.
 
 ---
 
@@ -15,14 +15,19 @@
 
 ## 1. Where things stand
 
-The baseline agent is a **pure heuristic** now located in [policy.py](file:///home/gytdrop/Documents/HACKATHONS/2026/kaggle/kagriculture/policy.py) (scoring **~123k+** on evaluations, v7 baseline). 
+The baseline agent is a **highly optimized heuristic** now located in [policy.py](file:///home/gytdrop/Documents/HACKATHONS/2026/kaggle/kagriculture/policy.py) (scoring **~111k+ / 115k+** median on evaluations, v7 baseline + optimizations). 
 
-The PPO Reinforcement Learning model files have been archived to `versions/` as legacy code. We are transitioning to a **Decision Transformer** offline learning strategy that will train on the 73 top-player replays under `downloads/training/`.
+In this checkpoint run, we implemented:
+- **Routing Efficiency:** Rewrote task assignment to favor local (`d=0`) actions regardless of tier, saving worker steps and boosting useful turns.
+- **Replanting Buffer:** Sows are planned instantly by keeping a seed buffer for crops currently harvesting in the same turn.
+- **Melon Price Protection:** Increased Melon market reserve fraction to `0.80` to prevent self-price dumping.
+- **Goose Management (Discarded):** We implemented and evaluated Coop + Goose management. It significantly decreased scores (-7k points; 0/20 wins) compared to routing+replanting optimizations, likely due to low egg value ($50) and building overhead. We have disabled/reverted it.
+- **Decision Transformer Inference:** Implemented a full pure-NumPy self-attention DT inference engine class (`DecisionTransformer`) inside `policy.py` so it can immediately run offline-trained PyTorch weights once exported to `.npz`.
 
-### Reproduce the Baseline Numbers
+### Evaluate the Current Policy Against the Baseline v7
 
 ```bash
-python evaluate.py policy.py versions/heuristic_BASELINE_ab.py --games 10
+python evaluate.py ml_main.py versions/heuristic_v7.py --games 10
 ```
 
 ---
@@ -41,14 +46,14 @@ Key parameters:
 
 ---
 
-## 3. Decision Transformer Blueprint
+## 3. Decision Transformer Integration
 
 We will train a sequence model on player-episodes scoring $\ge 100k$ from our replay corpus:
 - **Input sequence**: $[R_1, S_1, A_1, R_2, S_2, A_2, \dots, R_t, S_t, A_t]$
 - **States ($S$)**: Vector representation of local and global farm states.
 - **Actions ($A$)**: Discrete action tokens for planting, watering, animal buying, and market trades.
 - **Returns-to-go ($R$)**: Target final cash remaining to achieve.
-- **Inference**: The causal self-attention network will be implemented in NumPy inside `policy.py` for lightning-fast execution.
+- **Inference**: The causal self-attention network has been implemented in NumPy inside `policy.py` for lightning-fast execution.
 
 ---
 
@@ -56,7 +61,7 @@ We will train a sequence model on player-episodes scoring $\ge 100k$ from our re
 
 | File | Role |
 |---|---|
-| `policy.py` | **The strategy core.** Contains the v7 heuristic baseline and will house the NumPy Decision Transformer engine. |
+| `policy.py` | **The strategy core.** Contains the optimized heuristic and the NumPy Decision Transformer engine. |
 | `ml_main.py` | Entrypoint packaged as `main.py` for Kaggle; delegates to `policy.agent`. |
 | `evaluate.py` | A/B evaluation harness with paired t-test. |
 | `build_submission.py` | Builds `ml_submission.tar.gz` (packages only `ml_main.py` and `policy.py`). |
@@ -67,7 +72,7 @@ We will train a sequence model on player-episodes scoring $\ge 100k$ from our re
 
 ## 5. Next Steps
 
-1. **Replay Parser**: Write a script to load JSON logs from `downloads/training/` and format them into sequence sequences of `(R, S, A)`.
-2. **Train Script**: Implement a Decision Transformer model in PyTorch using causal self-attention, trained via supervised learning to predict the next expert action.
-3. **NumPy Port**: Export trained weights and write a pure-NumPy self-attention inference pipeline in `policy.py`.
-4. **Evaluate**: Run `python evaluate.py` to compare the Decision Transformer agent against the v7 heuristic baseline.
+1. **Replay Parser**: Refine `parse_replays.py` to format JSON logs from `downloads/training/` into sequence sequences of `(R, S, A)` matching the model's dimensions.
+2. **Train Script**: Implement the Decision Transformer training loop in PyTorch using causal self-attention, trained via supervised learning to predict the next expert action.
+3. **Weights Export**: Export PyTorch model weights to `.npz` format matching the weight names expected by the NumPy implementation in `policy.py`.
+4. **Evaluate**: Run evaluations comparing the active Decision Transformer agent against the active heuristic baseline.

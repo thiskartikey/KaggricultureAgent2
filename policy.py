@@ -138,8 +138,10 @@ LAND_PRICES = [1000, 2000, 4000]   # cost of the 2nd, 3rd, 4th quadrant
 
 # ── Blueprint targets (from the mined aggregate) ──────────────────────────────
 TARGET_PASTURE_BY_DAY = ((11, 14), (7, 12), (0, 6))   # (day_from, count)
+TARGET_COOP_BY_DAY = ((11, 0), (7, 0), (0, 0))
 TARGET_COW = 8
 TARGET_SHEEP = 6
+TARGET_GOOSE = 0
 TARGET_STRAWBERRY = 42
 TARGET_MELON = 12
 LAND_UNLOCK_DAY = (7, 11)          # earliest day for the 2nd / 3rd quadrant
@@ -152,6 +154,12 @@ def target_pastures(day):
         if day >= day_from:
             return count
     return 6
+
+def target_coops(day):
+    for day_from, count in TARGET_COOP_BY_DAY:
+        if day >= day_from:
+            return count
+    return 0
 
 
 def target_hands(day, total_days):
@@ -183,7 +191,7 @@ def hire_cost(n_already_hired):
 # ── Market helpers ─────────────────────────────────────────────────────────────
 _RESERVE_FRAC = {
     "WHEAT": 0.55, "CARROT": 0.40, "TOMATO": 0.40, "EGG": 0.40,
-    "MILK": 0.50, "WOOL": 0.50, "STRAWBERRY": 0.50, "MELON": 0.50,
+    "MILK": 0.50, "WOOL": 0.50, "STRAWBERRY": 0.50, "MELON": 0.80, # don't self dump melon
     "FERTILIZER": 0.35,
 }
 
@@ -453,28 +461,29 @@ def _plant_choice(day, total_days, planted, seeds):
     return None
 
 
-def _seed_targets(day, total_days, planted, free_n):
+def _seed_targets(day, total_days, planted, free_n, harvest_crop_n=0):
     """How many seeds of each crop we still want to hold."""
     left = total_days - day
     want = {}
+    
+    # R1: Maintain a buffer of seeds for crops that are about to be harvested
+    # so we can plant immediately.
+    target_free = free_n + harvest_crop_n
+    
     if left >= 13:
-        want["MELON"] = max(0, min(TARGET_MELON - planted.get("MELON", 0), free_n))
+        want["MELON"] = max(0, min(TARGET_MELON - planted.get("MELON", 0), target_free))
         want["STRAWBERRY"] = max(
             0, min(TARGET_STRAWBERRY - planted.get("STRAWBERRY", 0),
-                   free_n - want["MELON"]))
+                   target_free - want["MELON"]))
     if left >= 5:
-        # Wheat backfills every tile the cash crops do not claim, and we keep a
-        # standing order rather than importing feed: a 10-coin seed returns 4-6
-        # units (~2/unit) against ~37 to buy the same wheat off the market.
-        # Measured at +5,964 (p=0.000, 16/20) against the version that bought
-        # its feed -- see the live-game cost analysis in CHECKPOINT_RESUME.md.
-        rest = free_n - want.get("MELON", 0) - want.get("STRAWBERRY", 0)
-        want["WHEAT"] = max(8, min(max(0, rest), 30))
+        # Wheat fills the rest, but always keep a minimum buffer of 15
+        rest = target_free - want.get("MELON", 0) - want.get("STRAWBERRY", 0)
+        want["WHEAT"] = max(15, min(max(0, rest), 30))
     return want
 
 
 # ── Market order builder ──────────────────────────────────────────────────────
-def _make_market_orders(obs, player=0, total_days=30):
+def _make_market_orders(obs, player=0, total_days=30, scan=None):
     me = obs["farms"][player]
     private = obs.get("private") or {}
     market = obs.get("market") or {}
@@ -560,7 +569,7 @@ def _make_market_orders(obs, player=0, total_days=30):
     slots = empty_pastures - pending
     if (day < total_days - 8 and slots > 0 and shed_total < SHED_CAP - 5
             and len(orders) < 10):
-        for animal, target in (("COW", TARGET_COW), ("SHEEP", TARGET_SHEEP)):
+        for animal, target in (("COW", TARGET_COW), ("SHEEP", TARGET_SHEEP), ("GOOSE", TARGET_GOOSE)):
             if census[animal] >= target or slots <= 0:
                 continue
             cost = ANIMAL_SPECS[animal]["cost"]
@@ -575,7 +584,8 @@ def _make_market_orders(obs, player=0, total_days=30):
 
     # ── R7: seeds for the tiles we are about to sow ─────────────────────────
     planted = _crop_census(me)
-    want_seeds = _seed_targets(day, total_days, planted, len(free_cells))
+    harvest_n = len(scan.get('harvest_crop', [])) if scan else 0
+    want_seeds = _seed_targets(day, total_days, planted, len(free_cells), harvest_n)
     for crop in ("MELON", "STRAWBERRY", "WHEAT"):
         if len(orders) >= 10:
             break
@@ -605,6 +615,7 @@ TASK_TIER = {
     "place_animal": 1,   # an animal sitting in the shed earns nothing
     "service_soon": 1,   # routine upkeep: harvest / collect fertilizer / care
     "build_pasture": 2,
+    "build_coop": 2,
     "plant": 2,          # a tile sown today compounds for the rest of the season
     # Spending a fertilizer on a producing strawberry doubles its next yield
     # (~+120-240) against the ~70-100 it would fetch on the market, so it beats
@@ -637,27 +648,36 @@ def _build_tasks(scan, me, private, free_cells, day, total_days, hour=0):
     shed = private.get("shed") or {}
     invs = private.get("inventories") or []
     unplaced = {}
-    for a in ("COW", "SHEEP"):
+    for a in ("COW", "SHEEP", "GOOSE"):
         n = int(shed.get(a, 0)) + sum(int(i.get(a, 0)) for i in invs)
         if n > 0:
             unplaced[a] = n
     if unplaced:
         for (cell, kind) in scan["structures_empty"]:
-            if kind != "PASTURE":
+            if kind not in ("PASTURE", "COOP"):
                 continue
             for a in list(unplaced):
                 if unplaced[a] > 0:
-                    tasks.append(("place_animal", (a, cell)))
-                    unplaced[a] -= 1
-                    break
+                    req_kind = ANIMAL_SPECS[a]["structure"]
+                    if kind == req_kind:
+                        tasks.append(("place_animal", (a, cell)))
+                        unplaced[a] -= 1
+                        break
 
-    # Build pastures up to the blueprint cap -- never pave over crop land.
+    # Build structures up to the blueprint cap -- never pave over crop land.
     have_pastures = _count_structures(me, "PASTURE")
-    deficit = target_pastures(day) - have_pastures
-    if deficit > 0 and day < total_days - 8:
-        for cell in free_cells[:deficit]:
+    deficit_pasture = target_pastures(day) - have_pastures
+    if deficit_pasture > 0 and day < total_days - 8:
+        for cell in free_cells[:deficit_pasture]:
             tasks.append(("build_pasture", cell))
-        free_cells = free_cells[deficit:]
+        free_cells = free_cells[deficit_pasture:]
+        
+    have_coops = _count_structures(me, "COOP")
+    deficit_coop = target_coops(day) - have_coops
+    if deficit_coop > 0 and day < total_days - 8:
+        for cell in free_cells[:deficit_coop]:
+            tasks.append(("build_coop", cell))
+        free_cells = free_cells[deficit_coop:]
 
     # Sow the remaining free land.  A plant counts its planting day as unwatered
     # already, so anything sown too late to also be watered today dies tonight.
@@ -715,44 +735,48 @@ def _assign_tasks(positions, tasks, invs, board, claims=None, feed_cells=None):
             taken.add(key)
             free.discard(ui)
 
-    # 2. Fill the rest tier by tier, closest pair first.
-    for tier in range(N_TIERS):
-        pool = [t for t in tasks
-                if TASK_TIER.get(t[0], 3) == tier and (t[0], _task_cell(t)) not in taken]
-        if not pool:
-            continue
-        # A hungry animal can only be fed by somebody actually holding wheat.
-        # Sending the merely-closest worker meant it arrived empty, did the
-        # care/collect chores instead, and left the animal to starve.
-        feed_cells = feed_cells or set()
-        have_wheat = any(int((invs[ui] if ui < len(invs) else {}).get("WHEAT", 0)) > 0
-                         for ui in free)
-        pairs = []
-        for ui in free:
-            for t in pool:
-                cell = _task_cell(t)
-                if cell is None:
-                    continue
-                inv = invs[ui] if ui < len(invs) else {}
-                carrying = int(inv.get("WHEAT", 0)) > 0
-                if t[0] == "fertilize" and int(inv.get("FERTILIZER", 0)) <= 0:
-                    continue      # only workers already carrying fertilizer
-                hungry = t[0] in ("service", "service_soon") and cell in feed_cells
-                if hungry and have_wheat and not carrying:
-                    continue      # let a worker with feed take this one
-                d = manhattan(positions[ui], cell)
-                if hungry and carrying:
-                    d -= 3
-                pairs.append((d, ui, (t[0], cell), t))
-        pairs.sort(key=lambda p: (p[0], p[1]))
-        for d, ui, key, t in pairs:
-            if ui not in free or key in taken:
+    # 2. Fill the rest by a global score, strongly preferring d=0 for non-urgent tasks.
+    feed_cells = feed_cells or set()
+    have_wheat = any(int((invs[ui] if ui < len(invs) else {}).get("WHEAT", 0)) > 0 for ui in free)
+    pairs = []
+    
+    for ui in free:
+        for t in tasks:
+            key = (t[0], _task_cell(t))
+            if key in taken:
                 continue
-            assignment[ui] = t
-            taken.add(key)
-            free.discard(ui)
-        if not free:
-            break
+            tier = TASK_TIER.get(t[0], 3)
+            cell = _task_cell(t)
+            if cell is None:
+                continue
+            inv = invs[ui] if ui < len(invs) else {}
+            carrying = int(inv.get("WHEAT", 0)) > 0
+            if t[0] == "fertilize" and int(inv.get("FERTILIZER", 0)) <= 0:
+                continue
+            hungry = t[0] in ("service", "service_soon") and cell in feed_cells
+            if hungry and have_wheat and not carrying:
+                continue
+                
+            d = manhattan(positions[ui], cell)
+            if hungry and carrying:
+                d -= 3
+                
+            # Score logic: Tier 0 is absolute priority. 
+            # If a worker is AT the tile (d=0), they should do the task there instead of walking,
+            # UNLESS there's a Tier 0 emergency.
+            score = tier * 1000 + d
+            if d == 0 and tier > 0:
+                score -= 1500  # Pulls it below the tier above it, but not below tier 0.
+            
+            pairs.append((score, ui, key, t))
+            
+    pairs.sort(key=lambda p: (p[0], p[1]))
+    for score, ui, key, t in pairs:
+        if ui not in free or key in taken:
+            continue
+        assignment[ui] = t
+        taken.add(key)
+        free.discard(ui)
     return assignment
 
 
@@ -811,6 +835,8 @@ def _unit_op(pos, task, private, unit_idx, board, me, shed_wheat):
         return _go(target, ["WATER"])
     if kind == "build_pasture":
         return _go(target, ["BUILD_PASTURE"])
+    if kind == "build_coop":
+        return _go(target, ["BUILD_COOP"])
     if kind == "fertilize":
         return _go(target, ["FERTILIZE"])
     if kind == "plant":
@@ -864,7 +890,7 @@ def _agent(obs, total_days=30):
     _sheds = shed_adjacent_cells(board, me)
     free_cells.sort(key=lambda c: min(manhattan(c, s) for s in _sheds))
 
-    orders = _make_market_orders(obs, player, total_days)
+    orders = _make_market_orders(obs, player, total_days, scan)
     tasks = _build_tasks(scan, me, private, free_cells, day, total_days, hour)
 
     positions = [tuple(me.get("farmer") or (4, 4))]
@@ -976,6 +1002,117 @@ def plan_portfolio(day, total_days, money, free_tiles, seeds):
 
 def _count_animals_compat(me, private=None):
     return _count_animals(me, private)
+
+
+# ── Decision Transformer Inference (NumPy) ────────────────────────────────────
+class DecisionTransformer:
+    def __init__(self, weights_path):
+        self.loaded = False
+        try:
+            import numpy as np
+            import os
+            if os.path.exists(weights_path):
+                self._w = dict(np.load(weights_path, allow_pickle=False))
+                self.loaded = True
+        except Exception:
+            pass
+            
+    def _linear(self, x, weight_key, bias_key=None):
+        import numpy as np
+        out = x @ self._w[weight_key].T
+        if bias_key and bias_key in self._w:
+            out += self._w[bias_key]
+        return out
+        
+    def _layer_norm(self, x, w_key, b_key, eps=1e-5):
+        import numpy as np
+        mean = np.mean(x, axis=-1, keepdims=True)
+        var = np.var(x, axis=-1, keepdims=True)
+        return self._w[w_key] * (x - mean) / np.sqrt(var + eps) + self._w[b_key]
+
+    def _self_attention(self, x, layer_idx, num_heads=4):
+        import numpy as np
+        seq_len, embed_dim = x.shape
+        head_dim = embed_dim // num_heads
+        
+        # Q, K, V projections
+        c_attn = self._linear(x, f'blocks.{layer_idx}.attn.c_attn.weight', f'blocks.{layer_idx}.attn.c_attn.bias')
+        q, k, v = np.split(c_attn, 3, axis=-1)
+        
+        # Reshape to (num_heads, seq_len, head_dim)
+        q = q.reshape(seq_len, num_heads, head_dim).transpose(1, 0, 2)
+        k = k.reshape(seq_len, num_heads, head_dim).transpose(1, 0, 2)
+        v = v.reshape(seq_len, num_heads, head_dim).transpose(1, 0, 2)
+        
+        # Causal mask
+        mask = np.tril(np.ones((seq_len, seq_len)))
+        mask = mask.reshape(1, seq_len, seq_len)
+        
+        # Attention scores
+        scores = q @ k.transpose(0, 2, 1) / np.sqrt(head_dim)
+        scores = np.where(mask == 1, scores, -1e4)
+        
+        # Softmax
+        scores = scores - np.max(scores, axis=-1, keepdims=True)
+        probs = np.exp(scores) / np.sum(np.exp(scores), axis=-1, keepdims=True)
+        
+        # Weighted sum
+        out = (probs @ v).transpose(1, 0, 2).reshape(seq_len, embed_dim)
+        return self._linear(out, f'blocks.{layer_idx}.attn.c_proj.weight', f'blocks.{layer_idx}.attn.c_proj.bias')
+
+    def predict(self, states, actions, returns_to_go):
+        """
+        Forward pass for causal transformer.
+        Expects sequences of shape (K, dim). Returns logits for next action.
+        """
+        if not self.loaded:
+            return 7 # fallback to PASS
+            
+        import numpy as np
+        
+        # Embeddings
+        s_emb = self._linear(states, 'embed_state.weight', 'embed_state.bias')
+        a_emb = self._linear(actions, 'embed_action.weight', 'embed_action.bias')
+        r_emb = self._linear(returns_to_go, 'embed_return.weight', 'embed_return.bias')
+        
+        # Interleave (R, s, a) 
+        # For prediction, we only have R and s for the current step
+        # Assuming sequence length K
+        K = states.shape[0]
+        embed_dim = s_emb.shape[-1]
+        
+        # Construct token sequence
+        seq = np.zeros((K * 3, embed_dim))
+        seq[0::3] = r_emb
+        seq[1::3] = s_emb
+        seq[2::3] = a_emb # The last action is a dummy, but we only care about the state representation
+        
+        # Positional embedding
+        positions = np.arange(K)
+        pos_emb = self._w['embed_timestep.weight'][positions]
+        pos_emb_interleaved = np.repeat(pos_emb, 3, axis=0)
+        
+        x = seq + pos_emb_interleaved
+        x = self._layer_norm(x, 'embed_ln.weight', 'embed_ln.bias')
+        
+        # Transformer blocks
+        num_layers = sum(1 for k in self._w.keys() if k.endswith('.attn.c_attn.weight'))
+        for i in range(num_layers):
+            # Attention
+            h = self._layer_norm(x, f'blocks.{i}.ln_1.weight', f'blocks.{i}.ln_1.bias')
+            x = x + self._self_attention(h, i)
+            # MLP
+            h = self._layer_norm(x, f'blocks.{i}.ln_2.weight', f'blocks.{i}.ln_2.bias')
+            mlp_h = self._linear(h, f'blocks.{i}.mlp.c_fc.weight', f'blocks.{i}.mlp.c_fc.bias')
+            mlp_h = mlp_h * (mlp_h > 0) # ReLU/GELU approx
+            x = x + self._linear(mlp_h, f'blocks.{i}.mlp.c_proj.weight', f'blocks.{i}.mlp.c_proj.bias')
+            
+        x = self._layer_norm(x, 'ln_f.weight', 'ln_f.bias')
+        
+        # Predict action from the state token (index 1::3)
+        state_tokens = x[1::3]
+        logits = self._linear(state_tokens[-1:], 'predict_action.weight', 'predict_action.bias')
+        return int(np.argmax(logits[0]))
 
 
 # ── Entrypoint function (MUST be the last top-level function defined) ────────
