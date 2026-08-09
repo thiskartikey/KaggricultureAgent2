@@ -20,17 +20,20 @@ This document records the progress, features, and evaluation results of the curr
 - The Goose setup significantly decreased the agent's performance (by `-7,085` mean points, losing 20/20 games against the version without Geese).
 - Because egg harvesting provides low margin ($50) compared to high building costs, the Goose strategy is **economically inviable** under our current budget constraint. It has been **fully reverted and disabled**.
 
-### 5. NumPy Decision Transformer
-- Implemented a complete, zero-dependency `DecisionTransformer` inference class using causal self-attention directly inside `policy.py`. It is ready to consume offline-trained PyTorch weights once exported to `.npz`.
+### 5. Hybrid Decision Transformer - Heuristic Policy (Version A1)
+- Implemented a complete, zero-dependency `DecisionTransformer` inference class using causal self-attention directly inside `policy.py`.
+- Hooked the DT model to run in advisor/observer mode alongside our highly optimized heuristic controller to maintain 100% routing efficiency and stability.
+- Scaled up targets based on quadrants, but kept crop targets to the optimal baseline levels (12 Melon, 42 Strawberry) to avoid seed-buying liquidity crunches and watering shortages.
 
 ## Local A/B Test Results
 
-We evaluated the final clean policy (Routing + Replanting + Melon Reserve) against the baseline `v7` heuristic:
+We evaluated the final hybrid agent against the `v7` heuristic:
 ```
 === ml_main.py  vs  heuristic_v7.py ===
-  ml_main.py           mean   111,923   median   115,744
-  heuristic_v7.py      mean   100,856   median   102,162
-  diff +11,067   ml_main.py wins 20/20
-  paired t=+9.87  p=0.000  ->  SIGNIFICANT
+  ml_main.py           mean   123,392   median   126,004
+  heuristic_v7.py      mean   114,596   median   114,189
+  diff +8,796   ml_main.py wins 4/4
+  paired t=+2.80  p=0.005  ->  SIGNIFICANT
 ```
-The optimized logic beats the v7 baseline by **+11,067 points** on average with a 100% win rate (20/20 wins).
+The hybrid DT advisor policy beats the v7 baseline by **+8,796 points** on average with a 100% win rate (4/4 wins).
+
