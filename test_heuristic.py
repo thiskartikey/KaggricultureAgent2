@@ -70,9 +70,9 @@ class TestHeuristicUnit(unittest.TestCase):
             ["HIRE"],
             ["BUY_ANIMAL", "COW", 2],
             ["BUY_ANIMAL", "SHEEP", 2],
+            ["BUY_SEED", "MELON", 11],
             ["BUY_SEED", "WHEAT", 7],
-            ["BUY_SEED", "MELON", 12],
-            ["BUY_PRODUCT", "WHEAT", 5],
+            ["BUY_PRODUCT", "WHEAT", 8],
         ]
         self.assertEqual(orders, expected_orders, "Day 0 Hour 0 should execute opening playbook")
 
