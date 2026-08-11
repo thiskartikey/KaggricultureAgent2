@@ -1,28 +1,27 @@
 # Agent Brain (Architecture)
 
-This document describes the design and internal workings of the Kaggriculture agent.
+This document describes the design and internal workings of the Kaggriculture agent (Version A1, restored 2026-08-12).
 
-## Core Architecture: Hybrid Decision Transformer & Heuristic Engine
+## Core Architecture: Heuristic Blueprint Engine
 
-The current agent is a **hybrid Decision Transformer & Heuristic rule-based strategy** implemented in [policy.py](file:///home/gytdrop/Documents/HACKATHONS/2026/kaggle/kagriculture/policy.py). It combines a pure NumPy self-attention GPT-style Decision Transformer (DT) with a globally optimal greedy matching heuristic routing system.
+The current agent is a **pure heuristic rule-based strategy** mined directly from top-player replays, implemented in [policy.py](file:///home/gytdrop/Documents/HACKATHONS/2026/kaggle/kagriculture/policy.py). The codebase contains a Decision Transformer implementation and weights (`rl_weights.npz`), but they are **disconnected**: `dt_task` is computed at ~line 1036 but then discarded by `dt_assigned_task = None` at line 1044, before task assignment runs. The DT never influences gameplay. The agent scores **~111k+ mean** locally (8 seeds x 2 seats).
 
 ```mermaid
 graph TD
     Obs[Raw Game Observation] --> Parse[Convert Obs to Dict]
-    Parse --> DT[Decision Transformer / predicts macro action]
     Parse --> Scan[_scan for available tasks]
     Scan --> BuildTasks[_build_tasks]
-    BuildTasks --> AssignTasks[_assign_tasks / Heuristic nearest-pair matching]
-    DT -. Advisor Mode .-> AssignTasks
+    BuildTasks --> AssignTasks[_assign_tasks / Tier-by-tier greedy nearest-pair matching with sticky claims]
     AssignTasks --> MarketOrders[_make_market_orders]
     MarketOrders --> Output[Output Action dict to Game]
 ```
 
 ## Key Files & Roles
 
-- **`ml_main.py` / `main.py`**: The agent entrypoint. Initializes the execution context and delegates step processing directly to `policy.agent`.
-- **`policy.py`**: The entire strategy engine. Implements the NumPy causal transformer block (`DecisionTransformer`), vector state representations (`obs_to_vec`), market order planners, prioritized operational task queues, agricultural spatial compaction algorithms, and livestock feeding management.
-- **`train_dt.py`**: PyTorch offline learning script that parses expert trajectories and trains the sequence Decision Transformer model, exporting weights to `rl_weights.npz` format.
-- **`versions/`**: Contains legacy archives of the old heuristic files (such as `heuristic_v7.py`).
+- **`ml_main.py` / `main.py`**: The agent entrypoint. Delegates to `policy.agent()`.
+- **`policy.py`**: The entire strategy engine. Implements tier-based task queuing (service → water → harvest → place → build → plant → weed), sticky task claims across turns to prevent worker oscillation, market order sequencing, prioritized operational task assignment, and livestock feeding/care management.
+- **`versions/Phase2_v1_policy.py`**: The validated A1 archive (byte-identical to policy.py as of 2026-08-12). Reference for any future rollback.
+- **`versions/heuristic_v7.py`**: The older pure-heuristic baseline before the v6 DT experiment.
+- **`rl_weights.npz`**: Dead-weight; the DT is disconnected so these weights are never loaded or used, despite being packaged in the submission tar.
 
 
