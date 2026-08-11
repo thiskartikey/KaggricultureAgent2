@@ -33,6 +33,6 @@ Sequence Input: [R_0, S_0, A_0, R_1, S_1, A_1, ... R_t, S_t, A_t] -> Predict -> 
 ## Development Checklist
 
 - [x] Implement NumPy-based self-attention forward pass in `policy.py` for zero-dependency inference (`DecisionTransformer` class).
-- [ ] Refine sequence-data parsing pipeline to convert raw replay JSONs into DT training tuples.
-- [ ] Implement and train the Decision Transformer network offline.
-- [ ] Export transformer weights to `.npz` format matching expectations of the `DecisionTransformer` class.
+- [x] Refine sequence-data parsing pipeline to convert raw replay JSONs into DT training tuples.
+- [x] Implement and train the Decision Transformer network offline.
+- [x] Export transformer weights to `.npz` format matching expectations of the `DecisionTransformer` class.

@@ -8,7 +8,7 @@ sim_output.txt
 filtered*.log
 stderr*.log
 stdout*.log
-
+downloads/
 # large artifacts
 *.webm
 *.npz
