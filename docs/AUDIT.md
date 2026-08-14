@@ -857,3 +857,43 @@ diff +15,823   policy.py wins 32/32   paired t=+13.14  p=0.000  SIGNIFICANT
 ---
 
 *Audit updated: 2026-08-15 (Phase2_v10)*
+
+---
+
+## 15. Phase2_v11 Session (2026-08-15, continued)
+
+### 15.1 Discovery: Fertilize Task Tier Too Low
+
+**Root cause**: `"fertilize": 2` (same priority as planting). Fertilizing a producing
+strawberry doubles its next yield (+4 units × ~$120 = +$480 value) vs selling the
+fertilizer on the market (~$100). The fertilize action is 4.8× more valuable than selling,
+yet it was deprioritized to the same tier as routine planting.
+
+**Fix applied** — `TASK_TIER["fertilize"] = 1` (same as service_soon/harvest_crop):
+```python
+"fertilize": 1,  # was 2
+```
+
+### 15.2 Phase2_v11 Validation
+
+**vs Phase2_v10 (32 games):**
+```
+Command: python3 evaluate.py policy.py versions/Phase2_v10_policy.py --games 16
+Output:
+  policy.py            mean 71,792   median 69,199
+  Phase2_v10_policy.py mean 69,756   median 67,559
+  diff +2,036   policy.py wins 28/32
+  paired t=+7.54  p=0.000  ->  SIGNIFICANT
+```
+
+**Cumulative vs Phase2_v1**: Δ ~+17,859 (extrapolating from v10 Δ+15,823 + v11 Δ+2,036)
+
+### 15.3 Rejected This Session
+
+| Test | Result | Verdict |
+|---|---|---|
+| build_pasture/coop tier 2→1 | p=0.644, Δ+342 | NOISE |
+
+---
+
+*Audit updated: 2026-08-15 (Phase2_v11)*

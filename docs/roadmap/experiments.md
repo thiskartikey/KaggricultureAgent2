@@ -191,3 +191,24 @@ Final: plan_sells simplified to sell-all with no price reserve:
 - **Results vs Phase2_v9 (32 games)**: Δ+3,457, 30/32 wins, p=0.000
 - **Results vs Phase2_v1 (32 games)**: Δ+15,823, 32/32 wins, p=0.000
 - **Verdict**: ACCEPTED — promoted to `versions/Phase2_v10_policy.py`
+
+---
+
+## EXP-20260815-15: Fertilize Tier 2→1 (Phase2_v11)
+- **Hypothesis**: Fertilize action (doubles strawberry yield ~+$480) is 4.8× more
+  valuable than selling fertilizer (~$100). Elevating to tier 1 ensures workers
+  apply fertilizer as soon as they carry it, not after planting.
+- **Baseline**: `versions/Phase2_v10_policy.py`
+- **Test Protocol**: 16 seeds × 2 seats = 32 games
+- **Results (vs Phase2_v10)**:
+  - Policy Mean: 71,792 | Baseline Mean: 69,756 | ΔMean: +2,036
+  - Paired t-stat: +7.54, p=0.000 — SIGNIFICANT
+  - Win Rate: 28/32 (87%)
+- **Verdict**: ACCEPTED — promoted to `versions/Phase2_v11_policy.py`
+
+---
+
+## EXP-20260815-16: build_pasture/coop Tier 2→1
+- **Baseline**: `versions/Phase2_v11_policy.py`
+- **Results**: p=0.644, Δ+342, wins 9/16 — NOISE
+- **Verdict**: REJECTED.
