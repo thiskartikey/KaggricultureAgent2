@@ -143,7 +143,7 @@ TARGET_COW = 8
 TARGET_SHEEP = 6
 TARGET_GOOSE = 0
 TARGET_STRAWBERRY = 44  # unchanged; top players ~35-36 but layout differs
-TARGET_MELON = 12
+TARGET_MELON = 14
 LAND_UNLOCK_DAY = (7, 11)          # earliest day for the 2nd / 3rd quadrant
 SHED_CAP = 100
 CASH_FLOOR = 350                   # keep enough to buy a day of animal feed
@@ -454,10 +454,9 @@ def _plant_choice(day, total_days, planted, seeds):
     if (planted.get("STRAWBERRY", 0) < TARGET_STRAWBERRY and left >= 13
             and int(seeds.get("STRAWBERRY", 0)) > 0):
         return "STRAWBERRY"
-    # WHEAT: min viable window = 3 days (plant+water day X, harvest day X+2 = 2 units).
-    # At max_yield_day=4 we get 4 units, but even 2 units @ ~$25 beats leaving the
-    # tile fallow.  Top players plant wheat into every freed tile in the endgame.
-    if left >= 3 and int(seeds.get("WHEAT", 0)) > 0:
+    # WHEAT: sown and harvested inside 5 days, ~4-6 units from a 10 seed, and
+    # doubles as animal feed -- the right filler for every leftover tile.
+    if left >= 5 and int(seeds.get("WHEAT", 0)) > 0:
         return "WHEAT"
     return None
 
@@ -477,13 +476,9 @@ def _seed_targets(day, total_days, planted, free_n, harvest_crop_n=0):
             0, min(TARGET_STRAWBERRY - planted.get("STRAWBERRY", 0),
                    target_free - want["MELON"]))
     if left >= 5:
-        # Wheat fills the rest. In endgame (days 20+) expired melon/straw tiles free
-        # up land that top players aggressively plant to wheat (2-day cycle).
-        # Allow a larger buffer (60) so those freed tiles can all be sown immediately.
+        # Wheat fills the rest, but always keep a minimum buffer of 15
         rest = target_free - want.get("MELON", 0) - want.get("STRAWBERRY", 0)
-        wmax = 60 if left <= 12 else 30
-        wmin = 20 if left <= 12 else 15
-        want["WHEAT"] = max(wmin, min(max(0, rest), wmax))
+        want["WHEAT"] = max(15, min(max(0, rest), 30))
     return want
 
 
@@ -690,10 +685,7 @@ def _build_tasks(scan, me, private, free_cells, day, total_days, hour=0):
 
     # Sow the remaining free land.  A plant counts its planting day as unwatered
     # already, so anything sown too late to also be watered today dies tonight.
-    # In the endgame (< 5 days left) we accept late-day plantings since the tile
-    # otherwise just sits empty and we'll water it the same turn or next turn.
-    plant_cutoff = 22 if (total_days - day) < 5 else 20
-    if hour <= plant_cutoff:
+    if hour <= 20:
         seeds = dict(private.get("seeds") or {})
         planted = _crop_census(me)
         for cell in free_cells:
@@ -721,8 +713,7 @@ def _task_cell(task):
     return target
 
 
-def _assign_tasks(positions, tasks, invs, board, claims=None, feed_cells=None,
-                  day=0, total_days=30):
+def _assign_tasks(positions, tasks, invs, board, claims=None, feed_cells=None):
     """Tier-by-tier greedy nearest-pair matching, with sticky claims.
 
     Recomputing assignments from scratch every turn made workers oscillate:
@@ -749,11 +740,6 @@ def _assign_tasks(positions, tasks, invs, board, claims=None, feed_cells=None,
             free.discard(ui)
 
     # 2. Fill the rest by a global score, strongly preferring d=0 for non-urgent tasks.
-    # In the endgame (day >= 20), promote "plant" to Tier 1 so workers sow freed
-    # melon/strawberry tiles instead of spending all turns on service_soon (CARE/
-    # COLLECT_FERTILIZER).  Top players run 44-57 wheat tiles by day 27; we stall
-    # at 12 because animal upkeep monopolises all 13 workers.
-    endgame = day >= 20
     feed_cells = feed_cells or set()
     have_wheat = any(int((invs[ui] if ui < len(invs) else {}).get("WHEAT", 0)) > 0 for ui in free)
     pairs = []
@@ -764,10 +750,6 @@ def _assign_tasks(positions, tasks, invs, board, claims=None, feed_cells=None,
             if key in taken:
                 continue
             tier = TASK_TIER.get(t[0], 3)
-            # Endgame: plant is now equal priority to service_soon so freed tiles
-            # get sown before CARE/COLLECT_FERTILIZER steals every worker slot.
-            if endgame and t[0] == "plant":
-                tier = 1
             cell = _task_cell(t)
             if cell is None:
                 continue
@@ -783,7 +765,7 @@ def _assign_tasks(positions, tasks, invs, board, claims=None, feed_cells=None,
             if hungry and carrying:
                 d -= 3
                 
-            # Score logic: Tier 0 is absolute priority.
+            # Score logic: Tier 0 is absolute priority. 
             # If a worker is AT the tile (d=0), they should do the task there instead of walking,
             # UNLESS there's a Tier 0 emergency.
             score = tier * 1000 + d
@@ -1075,7 +1057,7 @@ def _agent(obs, total_days=30):
     prev = _claims_for(player, step, len(positions))
     local_prev = {li: prev[gi] for li, gi in enumerate(assign_units) if gi in prev}
     assignment = _assign_tasks(assign_positions, tasks, assign_invs, board, local_prev,
-                               set(scan["feed"]), day=day, total_days=total_days)
+                               set(scan["feed"]))
                                
     claims = {}
     for local_i, task in assignment.items():

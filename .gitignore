@@ -29,3 +29,19 @@ tuning/
 downloads/
 # orchestrator scratch
 .agents/
+
+# large data artifacts — regeneratable, never commit
+data/processed/
+replays/
+venv/
+ml_submission.tar.gz
+context.txt
+project_context.md
+.ua/
+
+# scratch/investigation scripts
+scratch_*.py
+debug_*.py
+fix_*.py
+run_*.py
+analyze_*.py
