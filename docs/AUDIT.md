@@ -806,3 +806,54 @@ Output:
 ---
 
 *Audit updated: 2026-08-15 (Phase2_v9)*
+
+---
+
+## 14. Phase2_v10 Session (2026-08-15, continued)
+
+### 14.1 Discovery: Reserve Price Mechanism Is Counterproductive
+
+**Root cause**: The `plan_sells` function had a shed-fill "squeeze" mechanism that applied
+price reserve fractions. With avg shed fill ~36 items (94% of turns), `squeeze=1.0` applied
+full `_RESERVE_FRAC` reserves. Evidence from iterative testing:
+
+| squeeze (sparse shed) | Δ vs v9 | wins/16 |
+|---|---|---|
+| 1.0 (v9 baseline) | 0 | — |
+| 0.7 | +1,259 | 14/16 |
+| 0.5 | +1,867 | 15/16 |
+| 0.3 | +2,778 | 13/16 |
+| 0.0 | +3,586 | 15/16 |
+
+Selling at market price always is better than waiting for a "good" price because:
+1. Shed overflow is binned at day-end (holding is penalized by cap, not rewarded)
+2. In self-play, both agents flood market equally — first-mover advantage from immediate sells
+3. For WHEAT (most impact), price stays above $13.75 at any inventory, so reserve never mattered
+
+**Fix applied**: Replaced the squeeze/reserve logic entirely with unconditional sell-all:
+```python
+def plan_sells(shed, market_inv, day, hour, total_days, hold=None):
+    orders = []
+    hold = hold or {}
+    for product in SELL_PRODUCE:
+        qty = max(0, int(shed.get(product, 0)) - int(hold.get(product, 0)))
+        if qty > 0:
+            orders.append(["SELL", product, qty])
+    return orders
+```
+
+### 14.2 Phase2_v10 Validation
+
+**vs Phase2_v9 (32 games):**
+```
+diff +3,457   policy.py wins 30/32   paired t=+10.54  p=0.000  SIGNIFICANT
+```
+
+**vs Phase2_v1 (32 games):**
+```
+diff +15,823   policy.py wins 32/32   paired t=+13.14  p=0.000  SIGNIFICANT
+```
+
+---
+
+*Audit updated: 2026-08-15 (Phase2_v10)*

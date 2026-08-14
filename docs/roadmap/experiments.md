@@ -171,3 +171,23 @@
   - Paired t-stat: +10.92, p=0.000 — SIGNIFICANT
   - Win Rate: 32/32 (100%)
 - **Verdict**: ACCEPTED — promoted to `versions/Phase2_v9_policy.py`
+
+---
+
+## EXP-20260815-13: Shed Squeeze 85/65→75/50 (Phase2_v9) — Squeeze=0.45/1.0
+Already logged above.
+
+## EXP-20260815-14: Reserve Price Mechanism Removal (Phase2_v10)
+
+Iterative squeeze sweep vs Phase2_v9:
+| squeeze (sparse shed) | Δ | wins/16 | p |
+|---|---|---|---|
+| 0.7 | +1,259 | 14/16 | 0.000 |
+| 0.5 | +1,867 | 15/16 | 0.000 |
+| 0.3 | +2,778 | 13/16 | 0.000 |
+| 0.0 | +3,586 | 15/16 | 0.000 |
+
+Final: plan_sells simplified to sell-all with no price reserve:
+- **Results vs Phase2_v9 (32 games)**: Δ+3,457, 30/32 wins, p=0.000
+- **Results vs Phase2_v1 (32 games)**: Δ+15,823, 32/32 wins, p=0.000
+- **Verdict**: ACCEPTED — promoted to `versions/Phase2_v10_policy.py`
