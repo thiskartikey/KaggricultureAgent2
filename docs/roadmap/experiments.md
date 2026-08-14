@@ -212,3 +212,19 @@ Final: plan_sells simplified to sell-all with no price reserve:
 - **Baseline**: `versions/Phase2_v11_policy.py`
 - **Results**: p=0.644, Δ+342, wins 9/16 — NOISE
 - **Verdict**: REJECTED.
+
+## EXP-TBD-05a: Pasture Ramp ((10,14),(7,9),(0,6)) — full roadmap variant
+- **Baseline**: `versions/Phase2_v11_policy.py`
+- **Mutation**: `TARGET_PASTURE_BY_DAY = ((10, 14), (7, 9), (0, 6))`
+- **Results**: Policy Mean: 63,258 | Baseline Mean: 69,648 | ΔMean: -6,389 | wins 0/16, p=0.000 — CATASTROPHIC REGRESSION
+- **Root Cause**: `(7, 9)` drops mid-game pasture target from 12→9, starving the animal engine during days 7–9 (3 fewer pastures = 3 fewer animals = ~$450/day lost × 9+ days).
+- **Verdict**: REJECTED.
+
+## EXP-TBD-05b: Pasture Ramp ((10,14),(7,12),(0,6)) — day threshold only
+- **Baseline**: `versions/Phase2_v11_policy.py`
+- **Mutation**: `TARGET_PASTURE_BY_DAY = ((10, 14), (7, 12), (0, 6))` — only changes peak target day 11→10
+- **Results**: Policy Mean: 69,904 | Baseline Mean: 69,904 | ΔMean: +0 | wins 5/16 (6 ties), p=1.000 — NOISE
+- **Root Cause**: The agent cannot physically build/afford the 13th–14th pasture before day 11 regardless of what the constant says. The threshold change is a no-op.
+- **Key Insight**: Like GAP-001, the replay observation (top players have 14 pastures by day 10) is a *consequence* of better early cash flow, not a configurable constant. To get 14 pastures by day 10, the agent needs more cash in days 7–9 — requires fixing early revenue generation.
+- **Verdict**: REJECTED (no-op).
+
