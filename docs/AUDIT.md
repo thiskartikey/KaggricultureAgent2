@@ -665,3 +665,79 @@ Output:
 ---
 
 *Audit updated: 2026-08-15 (Phase2_v7)*
+
+---
+
+## 12. Phase2_v8 Session (2026-08-15, continued)
+
+### 12.1 New Discovery: Mid-Game Wheat Over-Reserve
+
+**Evidence (pre-session replay analysis, n=30 gytdrop games):**
+```
+gytdrop wheat in shed at start of day (days 10-25):
+  day 10-25: mean=40-46 wheat, consistently ~44 units
+  feed_hold(14 animals, 44 wheat, days_buffer=3) = min(44, min(45, 42)) = 42
+  Sellable wheat = max(0, 44 - 42) = 2 units per turn!
+  
+Top players sell 35 wheat/game vs gytdrop 10.5/game (pre-v6)
+Root cause: 3-day feed buffer (42 units) held back nearly all wheat in shed.
+```
+
+**Root cause**: The `effective_buffer = max(0, min(3, days_left - 1))` cap was 3 on all days
+except the final 3. A 2-day buffer (28 units for 14 animals) is safe: animals escape only on
+the 2nd consecutive unfed day, and R5 actively re-buys wheat whenever supply drops below
+`fed_animals * 3`. The extra day of buffer was purely waste.
+
+**Fix applied** (`policy.py` line 525):
+```python
+# Before: effective_buffer = max(0, min(3, days_left - 1))
+effective_buffer = max(0, min(2, days_left - 1))
+```
+
+Buffer schedule:
+- Days 1-27 (days_left >= 3): effective_buffer=2 → hold 14×2=28 units (was 42)
+- Day 28 (days_left=2): effective_buffer=1 → hold 14×1=14 units (unchanged from v7)
+- Day 29 (days_left=1): effective_buffer=0 → hold 0 (unchanged from v7)
+
+Net freed wheat: ~14 units/turn on days 10-27 → ~14 × $25 = ~$350 extra sell revenue/day
+
+### 12.2 Phase2_v8 Validation
+
+**vs Phase2_v7 (32 games):**
+```
+Command: python3 evaluate.py policy.py versions/Phase2_v7_policy.py --games 16
+Output:
+  policy.py            mean 70,281   median 67,672
+  Phase2_v7_policy.py  mean 68,835   median 66,337
+  diff +1,446   policy.py wins 25/32
+  paired t=+5.08  p=0.000  ->  SIGNIFICANT
+```
+
+**vs Phase2_v1 (32 games):**
+```
+Command: python3 evaluate.py policy.py versions/Phase2_v1_policy.py --games 16
+Output:
+  policy.py            mean 68,294   median 67,296
+  Phase2_v1_policy.py  mean 57,984   median 53,007
+  diff +10,310   policy.py wins 31/32
+  paired t=+10.47  p=0.000  ->  SIGNIFICANT
+```
+
+### 12.3 Rejected Experiments This Session
+
+| Test | Result | Verdict |
+|---|---|---|
+| Day-0 opening: 8 MELON + 3 STRAW + 7 WHEAT (no wheat product buy) | p=0.000, Δ-5,187 | **CATASTROPHIC** — no wheat product means animals starve |
+| hour<2 sell restriction removed | p=0.928, Δ+75 | NOISE |
+| WOOL reserve 0.50→0.35 (re-test vs v7) | p=0.594, Δ+410 | NOISE |
+| `feed_hold` default days_buffer=2 | p=1.000, Δ=0 | NO EFFECT (overridden by call site) |
+
+### 12.4 Submissions Made This Session
+
+| Version | Changes | Δ vs v1 | p-value | Submitted |
+|---|---|---|---|---|
+| **Phase2_v8** | **v7 + reduce wheat buffer 3→2 days** | **+10,310** | **0.000** | pending |
+
+---
+
+*Audit updated: 2026-08-15 (Phase2_v8)*

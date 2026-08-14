@@ -110,3 +110,31 @@
   - Paired t-stat: +8.18, p=0.000 — SIGNIFICANT
   - Win Rate: 31/32 (97%)
 - **Verdict**: ACCEPTED — promoted to `versions/Phase2_v7_policy.py`
+
+---
+
+## EXP-20260815-08: Day-0 Opening: 8 MELON + 3 STRAW + 7 WHEAT (no wheat product)
+- **Hypothesis**: Plant 3 strawberry on day 0 instead of buying wheat product, to get first straw yield on day 10 (vs day 14).
+- **Baseline**: `versions/Phase2_v7_policy.py`
+- **Results**: p=0.000, Δ=-5,187, wins 1/16 — CATASTROPHIC
+- **Verdict**: REJECTED. No wheat product buy means animals starve early.
+
+---
+
+## EXP-20260815-09: Wheat Feed Buffer 3→2 Days (Phase2_v8)
+- **Hypothesis**: Reducing `effective_buffer` from 3 to 2 days frees ~14 wheat units/turn for
+  sale in mid-game, since 2 days of feed is sufficient (animals escape only on 2nd consecutive
+  unfed day; R5 re-buys proactively).
+- **Baseline**: `versions/Phase2_v7_policy.py`
+- **Evidence**: Replay analysis: shed holds ~44 wheat on days 10-25; with 3-day buffer (42 units
+  held), only 2 units sellable per turn. With 2-day buffer (28 held), 16 units sellable.
+- **Test Protocol**: 16 seeds × 2 seats = 32 games
+- **Results (vs Phase2_v7)**:
+  - Policy Mean: 70,281 | Baseline Mean: 68,835 | ΔMean: +1,446
+  - Paired t-stat: +5.08, p=0.000 — SIGNIFICANT
+  - Win Rate: 25/32 (78%)
+- **Results (vs Phase2_v1)**:
+  - Policy Mean: 68,294 | Baseline Mean: 57,984 | ΔMean: +10,310
+  - Paired t-stat: +10.47, p=0.000 — SIGNIFICANT
+  - Win Rate: 31/32 (97%)
+- **Verdict**: ACCEPTED — promoted to `versions/Phase2_v8_policy.py`
