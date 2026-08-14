@@ -741,3 +741,68 @@ Output:
 ---
 
 *Audit updated: 2026-08-15 (Phase2_v8)*
+
+---
+
+## 13. Phase2_v9 Session (2026-08-15, continued)
+
+### 13.1 New Discovery: Shed Squeeze Thresholds Too Conservative
+
+**Root cause**: The `plan_sells` shed-fill squeeze:
+```python
+# Before (v8):
+if shed_total >= 85: squeeze = 0.0    # full shed → ignore reserve
+elif shed_total >= 65: squeeze = 0.45  # medium shed → partial reserve  
+else:                  squeeze = 1.0   # sparse shed → full reserve
+```
+
+With shed_total averaging ~36 items (94% of sell turns), the agent always used `squeeze=1.0` (full reserve). Products were only sold when above the full reserve price threshold — even when the market could absorb them at lower prices.
+
+Lowering thresholds to 75/50 means the partial-squeeze kicks in earlier (shed ≥ 50 items), enabling more sells at partial-reserve prices.
+
+**Fix applied** (`policy.py` lines 203-209):
+```python
+if shed_total >= 75: squeeze = 0.0     # was 85
+elif shed_total >= 50: squeeze = 0.45  # was 65
+else:                  squeeze = 1.0
+```
+
+### 13.2 Phase2_v9 Validation
+
+**vs Phase2_v8 (32 games):**
+```
+Command: python3 evaluate.py policy.py versions/Phase2_v8_policy.py --games 16
+Output:
+  policy.py            mean 71,253   median 67,307
+  Phase2_v8_policy.py  mean 69,193   median 64,348
+  diff +2,061   policy.py wins 27/32
+  paired t=+4.69  p=0.000  ->  SIGNIFICANT
+```
+
+**vs Phase2_v1 (32 games):**
+```
+Command: python3 evaluate.py policy.py versions/Phase2_v1_policy.py --games 16
+Output:
+  policy.py            mean 69,850   median 69,232
+  Phase2_v1_policy.py  mean 56,726   median 51,826
+  diff +13,124   policy.py wins 32/32
+  paired t=+10.92  p=0.000  ->  SIGNIFICANT
+```
+
+### 13.3 Experiments This Session
+
+| Test | Result | Verdict |
+|---|---|---|
+| R5 wheat buy target 3→2 days | p=0.000, Δ-7,426 | **CATASTROPHIC** — animals starve |
+| plant_cutoff=22 for all days | p=0.992, Δ+11 | NOISE |
+| Shed squeeze thresholds 85/65→75/50 | p=0.000, Δ+2,061 | **ACCEPTED → Phase2_v9** |
+
+### 13.4 Submissions Made This Session
+
+| Version | Changes | Δ vs v1 | p-value | Submitted |
+|---|---|---|---|---|
+| **Phase2_v9** | **v8 + shed squeeze 85/65→75/50** | **+13,124** | **0.000** | pending |
+
+---
+
+*Audit updated: 2026-08-15 (Phase2_v9)*

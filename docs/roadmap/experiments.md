@@ -138,3 +138,36 @@
   - Paired t-stat: +10.47, p=0.000 — SIGNIFICANT
   - Win Rate: 31/32 (97%)
 - **Verdict**: ACCEPTED — promoted to `versions/Phase2_v8_policy.py`
+
+---
+
+## EXP-20260815-10: R5 Wheat Buy Target 3→2 Days
+- **Hypothesis**: Reduce wheat buy target to 2-day supply to free more wheat for selling.
+- **Baseline**: `versions/Phase2_v8_policy.py`
+- **Results**: p=0.000, Δ=-7,426, wins 1/16 — CATASTROPHIC
+- **Verdict**: REJECTED. Animals starve when buy target too low.
+
+---
+
+## EXP-20260815-11: Plant Cutoff Extended to Hour 22 for All Days
+- **Baseline**: `versions/Phase2_v8_policy.py`
+- **Results**: p=0.992, Δ+11 — NOISE
+- **Verdict**: REJECTED.
+
+---
+
+## EXP-20260815-12: Shed Squeeze Thresholds 85/65→75/50 (Phase2_v9)
+- **Hypothesis**: Lowering squeeze thresholds (from 85/65 to 75/50) triggers partial-reserve
+  selling earlier, when shed has ≥50 items instead of waiting for ≥65.
+- **Evidence**: 94% of sell turns have shed < 65 items (always full reserve). Lowering to 50
+  reduces full-reserve turns significantly.
+- **Test Protocol**: 16 seeds × 2 seats = 32 games
+- **Results (vs Phase2_v8)**:
+  - Policy Mean: 71,253 | Baseline Mean: 69,193 | ΔMean: +2,061
+  - Paired t-stat: +4.69, p=0.000 — SIGNIFICANT
+  - Win Rate: 27/32 (84%)
+- **Results (vs Phase2_v1)**:
+  - Policy Mean: 69,850 | Baseline Mean: 56,726 | ΔMean: +13,124
+  - Paired t-stat: +10.92, p=0.000 — SIGNIFICANT
+  - Win Rate: 32/32 (100%)
+- **Verdict**: ACCEPTED — promoted to `versions/Phase2_v9_policy.py`
