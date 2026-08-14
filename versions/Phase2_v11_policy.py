@@ -996,89 +996,23 @@ def _agent(obs, total_days=30):
             ops_out[i] = _unit_op(pos, ("dropoff", None), private, i,
                                   board, me, shed_wheat)
 
-    # ── DT Query ─────────────────────────────────────────────────────────────
-    dt_task = None
-    global DT_MODEL, STATE_HISTORY, ACTION_HISTORY, RETURN_HISTORY, TIMESTEP_HISTORY
-    
-    if day == 0 and hour == 0:
-        STATE_HISTORY = []
-        ACTION_HISTORY = []
-        RETURN_HISTORY = []
-        TIMESTEP_HISTORY = []
-        
-    import os
-    import numpy as np
-    
-    weights_file = "rl_weights.npz"
-    if DT_MODEL is None and os.path.exists(weights_file):
-        try:
-            DT_MODEL = DecisionTransformer(weights_file)
-        except Exception:
-            pass
-            
-    if DT_MODEL is not None and DT_MODEL.loaded:
-        try:
-            s_t = obs_to_vec(obs, player)
-            money = float(me.get("money", 0.0))
-            r_t = max(0.0, 200000.0 - money)
-            
-            STATE_HISTORY.append(s_t)
-            RETURN_HISTORY.append([r_t])
-            TIMESTEP_HISTORY.append(day * 24 + hour)
-            
-            if len(ACTION_HISTORY) < len(STATE_HISTORY):
-                dummy_a = np.zeros(8, dtype=np.float32)
-                dummy_a[7] = 1.0 # PASS
-                ACTION_HISTORY.append(dummy_a)
-                
-            K = 20
-            states_k = np.array(STATE_HISTORY[-K:], dtype=np.float32)
-            actions_k = np.array(ACTION_HISTORY[-K:], dtype=np.float32)
-            returns_k = np.array(RETURN_HISTORY[-K:], dtype=np.float32)
-            timesteps_k = np.array(TIMESTEP_HISTORY[-K:], dtype=np.int64)
-            
-            act_id = DT_MODEL.predict(states_k, actions_k, returns_k, timesteps_k)
-            
-            chosen_a = np.zeros(8, dtype=np.float32)
-            chosen_a[act_id] = 1.0
-            ACTION_HISTORY[-1] = chosen_a
-            
-            dummy_next = np.zeros(8, dtype=np.float32)
-            dummy_next[7] = 1.0
-            ACTION_HISTORY.append(dummy_next)
-            
-            dt_task = get_dt_task(act_id, positions[0], scan, free_cells)
-        except Exception:
-            pass
-
     # ── Task Assignment ──────────────────────────────────────────────────────
 
     free_units = [i for i in range(len(positions)) if ops_out[i] is None]
-    
-    dt_assigned_task = None
-                    
-    assign_units = list(free_units)
-    if dt_assigned_task is not None:
-        assign_units.remove(0)
-        
-    assign_positions = [positions[i] for i in assign_units]
-    assign_invs = [invs[i] if i < len(invs) else {} for i in assign_units]
-    
+    assign_positions = [positions[i] for i in free_units]
+    assign_invs = [invs[i] if i < len(invs) else {} for i in free_units]
+
     prev = _claims_for(player, step, len(positions))
-    local_prev = {li: prev[gi] for li, gi in enumerate(assign_units) if gi in prev}
+    local_prev = {li: prev[gi] for li, gi in enumerate(free_units) if gi in prev}
     assignment = _assign_tasks(assign_positions, tasks, assign_invs, board, local_prev,
                                set(scan["feed"]), day=day, total_days=total_days)
-                               
+
     claims = {}
     for local_i, task in assignment.items():
-        gi = assign_units[local_i]
+        gi = free_units[local_i]
         claims[gi] = task
         ops_out[gi] = _unit_op(positions[gi], task, private, gi, board, me, shed_wheat)
-        
-    if dt_assigned_task is not None:
-        claims[0] = dt_assigned_task
-        ops_out[0] = _unit_op(positions[0], dt_assigned_task, private, 0, board, me, shed_wheat)
-        
+
     _store_claims(player, step, len(positions), claims)
 
     # Idle units carrying goods walk them back to the shed instead of passing.
