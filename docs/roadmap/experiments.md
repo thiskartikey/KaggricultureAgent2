@@ -91,3 +91,22 @@
 - **Verdict**: ACCEPT / REJECT
 - **Notes**: ...
 ```
+
+---
+
+## EXP-20260815-07: Endgame Wheat Buffer Taper (Phase2_v7)
+
+- **Hypothesis**: The `feed_hold` function reserves up to 42 units of wheat (14 animals × 3-day buffer) at game end, including day 29 when animals no longer need feeding. Tapering the buffer to 0 on the final day will release 20–30 wheat units for sale, worth ~$700/game.
+- **Baseline**: `versions/Phase2_v6_policy.py` (Mean: ~65,641 vs v1)
+- **Mutation**: `policy.py` line 524 — compute `effective_buffer = max(0, min(3, days_left - 1))` and pass to `feed_hold()`
+- **Evidence**: Replay analysis (n=50 gytdrop games): WHEAT unsold at game end in 39/50 games, avg 27.7 units (~$693 lost/game)
+- **Test Protocol**: 16 seeds × 2 seats = 32 games
+- **Results (vs Phase2_v6)**:
+  - Policy Mean: 67,508 | Baseline Mean: 65,656 | ΔMean: +1,853
+  - Paired t-stat: +3.84, p=0.000 — SIGNIFICANT
+  - Win Rate: 24/32 (75%)
+- **Results (vs Phase2_v1)**:
+  - Policy Mean: 74,864 | Baseline Mean: 65,945 | ΔMean: +8,919
+  - Paired t-stat: +8.18, p=0.000 — SIGNIFICANT
+  - Win Rate: 31/32 (97%)
+- **Verdict**: ACCEPTED — promoted to `versions/Phase2_v7_policy.py`

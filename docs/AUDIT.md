@@ -597,4 +597,71 @@ diff +3,667   policy.py wins 28/32   p=0.000  SIGNIFICANT
 
 ---
 
-*Audit updated: 2026-08-15 (Phase2_v6)*
+## 11. Phase2_v7 Session (2026-08-15, continuation)
+
+### 11.1 New Discovery: Wheat Endgame Liquidation Bug
+
+**Evidence (replay analysis, n=50 gytdrop games):**
+```
+gytdrop final shed WHEAT: 39/50 games have unsold, avg 27.7 units when present
+Estimated value: 27.7 × $25 ≈ $693/game left on table
+```
+
+**Root cause**: `feed_hold(14_animals, shed_wheat, days_buffer=3)` reserves up to 42 units of
+wheat for animal feeding. On day 29 (last game day), animals don't need feeding after the game
+ends — but the buffer held full 3-day reserve all the way to the final step.
+
+**Fix applied** (`policy.py` line 524):
+```python
+# Taper the wheat buffer in the final days: animals don't need feed after
+# the game ends, so release held wheat as we approach the last turn.
+days_left = total_days - day
+effective_buffer = max(0, min(3, days_left - 1))
+hold = {"WHEAT": feed_hold(fed_animals, int(shed.get("WHEAT", 0)),
+                           days_buffer=effective_buffer)}
+```
+
+Buffer schedule:
+- Day 27 (days_left=3): effective_buffer=2 → hold 14×2=28 units
+- Day 28 (days_left=2): effective_buffer=1 → hold 14×1=14 units
+- Day 29 (days_left=1): effective_buffer=0 → hold 0, sell everything
+
+### 11.2 Phase2_v7 Validation
+
+**vs Phase2_v6 (32 games):**
+```
+Command: python3 evaluate.py policy.py versions/Phase2_v6_policy.py --games 16
+Output:
+  policy.py            mean 67,508   median 67,469
+  Phase2_v6_policy.py  mean 65,656   median 66,056
+  diff +1,853   policy.py wins 24/32
+  paired t=+3.84  p=0.000  ->  SIGNIFICANT
+```
+
+**vs Phase2_v1 (32 games):**
+```
+Command: python3 evaluate.py policy.py versions/Phase2_v1_policy.py --games 16
+Output:
+  policy.py            mean 74,864   median 73,664
+  Phase2_v1_policy.py  mean 65,945   median 64,180
+  diff +8,919   policy.py wins 31/32
+  paired t=+8.18  p=0.000  ->  SIGNIFICANT
+```
+
+### 11.3 Submissions Made This Session
+
+| Version | Changes | Δ vs v1 | p-value | Submitted |
+|---|---|---|---|---|
+| **Phase2_v7** | **v6 + endgame wheat buffer taper** | **+8,919** | **0.000** | pending |
+
+### 11.4 Rejected / Noise Experiments
+
+| Test | Reasoning | Verdict |
+|---|---|---|
+| STRAWBERRY reserve 0.50→0.40 | Market crashes to $1 at inv=10,500; reserve irrelevant above 10,000 | NOT TESTED (pure price analysis) |
+| MELON reserve lower | Already tested and optimal at 0.50 | SKIP |
+| WOOL reserve 0.50→0.35 | Previously: p=0.385, Δ+1,200 (noise) | NOISE |
+
+---
+
+*Audit updated: 2026-08-15 (Phase2_v7)*
