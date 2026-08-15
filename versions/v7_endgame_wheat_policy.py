@@ -163,20 +163,23 @@ def target_coops(day):
 
 
 def target_hands(day, total_days):
-    """Faster crew ramp: match top-player labour curve more tightly.
+    """Hands are re-hired daily; a 13-crew costs ~609, trivial vs. the payoff.
 
-    Top players run 3 hands days 1-4, 8 hands days 5-8, 13 from day 9.
-    Original was 3 until day 7, 8 until day 11.
+    Crew size tracks the mined replays: tiny on days 1-6 (one quadrant needs
+    almost no labour and every coin is wanted for melon seed and livestock),
+    then scaling hard once the extra quadrants are open.
     """
     if day <= 0:
         return 5
-    if day < 5:
+    if day < 7:
         return 3
-    if day < 9:
+    if day < 11:
         return 8
     if day >= total_days - 2:
-        return 10
+        return 10        # nothing left to plant, just harvest and sell
     return 13
+
+
 def hire_cost(n_already_hired):
     """cost of the n-th hire of the day = fib(n), fib(0)=fib(1)=1."""
     a, b = 1, 1
@@ -194,20 +197,33 @@ _RESERVE_FRAC = {
 
 
 def plan_sells(shed, market_inv, day, hour, total_days, hold=None):
-    """Sell down every turn: the shed only holds 100 and overflow is binned.
-
-    No price reserve: sell all available produce at market price every turn.
-    The shed cap (100 items) means unsold overflow is binned at end of day, so
-    waiting for a better price costs more than selling at today's price.
-    Wheat is protected separately via feed_hold (animal feed buffer).
-    """
+    """Sell down every turn: the shed only holds 100 and overflow is binned."""
     orders = []
     hold = hold or {}
+    shed_total = sum(int(v) for k, v in shed.items() if k not in ANIMAL_ITEMS)
+    # The fuller the shed, the less picky we are about price.
+    if shed_total >= 85:
+        squeeze = 0.0
+    elif shed_total >= 65:
+        squeeze = 0.45
+    else:
+        squeeze = 1.0
+    endgame = day >= total_days - 2
+
     for product in SELL_PRODUCE:
         qty = int(shed.get(product, 0))
         qty = max(0, qty - int(hold.get(product, 0)))
-        if qty > 0:
-            orders.append(["SELL", product, qty])
+        if qty <= 0:
+            continue
+        inv = int(market_inv.get(product, MARKET_PARAMS[product][1]))
+        if endgame:
+            sell_n = qty
+        else:
+            frac = _RESERVE_FRAC.get(product, 0.45) * squeeze
+            sell_n = min(qty, units_sellable_above(
+                product, inv, frac * MARKET_PARAMS[product][0]))
+        if sell_n > 0:
+            orders.append(["SELL", product, sell_n])
     return orders
 
 
@@ -505,12 +521,7 @@ def _make_market_orders(obs, player=0, total_days=30, scan=None):
         ]
 
     # ── R2: sell first so the rest of the turn is funded ─────────────────────
-    # Taper the wheat buffer in the final days: animals don't need feed after
-    # the game ends, so release held wheat as we approach the last turn.
-    days_left = total_days - day
-    effective_buffer = max(0, min(2, days_left - 1))
-    hold = {"WHEAT": feed_hold(fed_animals, int(shed.get("WHEAT", 0)),
-                               days_buffer=effective_buffer)}
+    hold = {"WHEAT": feed_hold(fed_animals, int(shed.get("WHEAT", 0)))}
     sells = plan_sells(shed, minv, day, hour, total_days, hold)
     # Early in the day leave order slots for hiring; catch up from hour 2.
     orders += sells if hour >= 2 else sells[:3]
@@ -618,7 +629,7 @@ TASK_TIER = {
     # Spending a fertilizer on a producing strawberry doubles its next yield
     # (~+120-240) against the ~70-100 it would fetch on the market, so it beats
     # simply selling the stuff -- as long as a worker is already carrying some.
-    "fertilize": 1,
+    "fertilize": 2,
     "water_soon": 3,     # already safe for today; catch it tomorrow if need be
     "weed": 4,
     "dropoff": 4,
@@ -993,23 +1004,89 @@ def _agent(obs, total_days=30):
             ops_out[i] = _unit_op(pos, ("dropoff", None), private, i,
                                   board, me, shed_wheat)
 
+    # ── DT Query ─────────────────────────────────────────────────────────────
+    dt_task = None
+    global DT_MODEL, STATE_HISTORY, ACTION_HISTORY, RETURN_HISTORY, TIMESTEP_HISTORY
+    
+    if day == 0 and hour == 0:
+        STATE_HISTORY = []
+        ACTION_HISTORY = []
+        RETURN_HISTORY = []
+        TIMESTEP_HISTORY = []
+        
+    import os
+    import numpy as np
+    
+    weights_file = "rl_weights.npz"
+    if DT_MODEL is None and os.path.exists(weights_file):
+        try:
+            DT_MODEL = DecisionTransformer(weights_file)
+        except Exception:
+            pass
+            
+    if DT_MODEL is not None and DT_MODEL.loaded:
+        try:
+            s_t = obs_to_vec(obs, player)
+            money = float(me.get("money", 0.0))
+            r_t = max(0.0, 200000.0 - money)
+            
+            STATE_HISTORY.append(s_t)
+            RETURN_HISTORY.append([r_t])
+            TIMESTEP_HISTORY.append(day * 24 + hour)
+            
+            if len(ACTION_HISTORY) < len(STATE_HISTORY):
+                dummy_a = np.zeros(8, dtype=np.float32)
+                dummy_a[7] = 1.0 # PASS
+                ACTION_HISTORY.append(dummy_a)
+                
+            K = 20
+            states_k = np.array(STATE_HISTORY[-K:], dtype=np.float32)
+            actions_k = np.array(ACTION_HISTORY[-K:], dtype=np.float32)
+            returns_k = np.array(RETURN_HISTORY[-K:], dtype=np.float32)
+            timesteps_k = np.array(TIMESTEP_HISTORY[-K:], dtype=np.int64)
+            
+            act_id = DT_MODEL.predict(states_k, actions_k, returns_k, timesteps_k)
+            
+            chosen_a = np.zeros(8, dtype=np.float32)
+            chosen_a[act_id] = 1.0
+            ACTION_HISTORY[-1] = chosen_a
+            
+            dummy_next = np.zeros(8, dtype=np.float32)
+            dummy_next[7] = 1.0
+            ACTION_HISTORY.append(dummy_next)
+            
+            dt_task = get_dt_task(act_id, positions[0], scan, free_cells)
+        except Exception:
+            pass
+
     # ── Task Assignment ──────────────────────────────────────────────────────
 
     free_units = [i for i in range(len(positions)) if ops_out[i] is None]
-    assign_positions = [positions[i] for i in free_units]
-    assign_invs = [invs[i] if i < len(invs) else {} for i in free_units]
-
+    
+    dt_assigned_task = None
+                    
+    assign_units = list(free_units)
+    if dt_assigned_task is not None:
+        assign_units.remove(0)
+        
+    assign_positions = [positions[i] for i in assign_units]
+    assign_invs = [invs[i] if i < len(invs) else {} for i in assign_units]
+    
     prev = _claims_for(player, step, len(positions))
-    local_prev = {li: prev[gi] for li, gi in enumerate(free_units) if gi in prev}
+    local_prev = {li: prev[gi] for li, gi in enumerate(assign_units) if gi in prev}
     assignment = _assign_tasks(assign_positions, tasks, assign_invs, board, local_prev,
                                set(scan["feed"]), day=day, total_days=total_days)
-
+                               
     claims = {}
     for local_i, task in assignment.items():
-        gi = free_units[local_i]
+        gi = assign_units[local_i]
         claims[gi] = task
         ops_out[gi] = _unit_op(positions[gi], task, private, gi, board, me, shed_wheat)
-
+        
+    if dt_assigned_task is not None:
+        claims[0] = dt_assigned_task
+        ops_out[0] = _unit_op(positions[0], dt_assigned_task, private, 0, board, me, shed_wheat)
+        
     _store_claims(player, step, len(positions), claims)
 
     # Idle units carrying goods walk them back to the shed instead of passing.

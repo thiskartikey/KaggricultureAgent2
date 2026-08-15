@@ -45,3 +45,6 @@ debug_*.py
 fix_*.py
 run_*.py
 analyze_*.py
+
+# Bob internal tooling
+.bob/
