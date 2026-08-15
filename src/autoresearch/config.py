@@ -28,15 +28,17 @@ PARAMETERS: Dict[str, ParamSpec] = {
     "TARGET_COW":         (8,   4,  12, 1),
     "TARGET_SHEEP":       (6,   2,  10, 1),
 
-    # Target crop counts
-    "TARGET_STRAWBERRY":  (42, 20,  60, 2),
-    "TARGET_MELON":       (12,  6,  20, 1),
+    # Target crop counts — finer steps around proven winners
+    "TARGET_STRAWBERRY":  (38, 28,  48, 1),   # winner=38; sweep ±10 at step 1
+    "TARGET_MELON":       (9,   6,  14, 1),   # winner=9; stay around 6-14
 
     # Land unlock earliest days (NE quadrant, SW quadrant)
-    "LAND_UNLOCK_DAY":    ((7, 11), [(5, 9), (6, 10), (7, 11), (7, 12), (8, 12)]),
+    # Added (7,9) and (7,10) — SW land one or two days earlier; NE stays day 7
+    "LAND_UNLOCK_DAY":    ((7, 11), [(6, 10), (7, 9), (7, 10), (7, 11), (7, 12), (8, 12)]),
 
-    # Cash safety floor (coins never sold below this balance)
-    "CASH_FLOOR":         (350, 100, 800, 50),
+    # Cash safety floor — winner=200; sweep down to 175 with step 25
+    # (150 was catastrophic so stay above that)
+    "CASH_FLOOR":         (200, 175, 450, 25),
 
     # Pasture ramp schedule: (day_from, target_count) descending
     "TARGET_PASTURE_BY_DAY": (

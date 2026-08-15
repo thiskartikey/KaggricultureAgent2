@@ -108,6 +108,19 @@ def next_exp_id() -> str:
 # Single experiment iteration
 # ---------------------------------------------------------------------------
 
+def _mutation_summary(mutation: dict) -> str:
+    """Create a stable, hash-tagged summary string for deduplication.
+
+    Embeds a SHA-256 prefix hash so _already_tried() can match even when the
+    full JSON is truncated. Format: {"_hash":"<16hex>","...truncated full JSON..."}
+    """
+    import hashlib
+    full = json.dumps(mutation, sort_keys=True)
+    h = hashlib.sha256(full.encode()).hexdigest()[:16]
+    tagged = json.dumps({"_hash": h, **mutation}, sort_keys=True)
+    return tagged[:300]  # generous enough for all currently known mutation types
+
+
 def run_one_iteration(verbose: bool = True, tried_params: Optional[set] = None) -> dict:
     """Execute one full experiment cycle.
 
@@ -192,7 +205,7 @@ def run_one_iteration(verbose: bool = True, tried_params: Optional[set] = None) 
             exp_id=exp_id,
             hypothesis=hypothesis["rationale"],
             target_code=hypothesis["target_code"],
-            diff_summary=json.dumps(hypothesis["mutation"])[:200],
+            diff_summary=_mutation_summary(hypothesis["mutation"]),
             tags=hypothesis["tags"],
             decision=result["decision"],
             stage_reached=result.get("stage", 0),
@@ -227,14 +240,23 @@ def run_one_iteration(verbose: bool = True, tried_params: Optional[set] = None) 
             # the same block (e.g. two different target_hands variants).
             mut = hypothesis.get("mutation", {})
             tags = hypothesis.get("tags", [])
-            if "param_name" in mut:
-                tried_params.add(mut["param_name"])
+            tier = hypothesis.get("tier", 1)
+            if tier == 0:
+                # Composite: use the composite_key embedded in the mutation dict
+                from src.autoresearch.hypothesis import _composite_key
+                ckey = mut.get("composite_key", tags[-1] if tags else "unknown")
+                tried_params.add(_composite_key(ckey))
+            elif "param_name" in mut:
+                # Use (param, value) as the key so only this specific value is
+                # blocked within the run — other untried values for the same
+                # param can still be proposed in later iterations.
+                tried_params.add(f"{mut['param_name']}={repr(mut.get('new_value'))}")
             elif "task_name" in mut:
                 tried_params.add(mut["task_name"] + "_tier")
             elif "block_name" in mut:
-                # Use block_name + second tag (e.g. "target_hands_endgame")
-                # for uniqueness across multiple Tier 2 variants on same block
-                suffix = tags[1] if len(tags) > 1 else mut["block_name"]
+                # Mirror the _tier2_key() logic: use last tag for uniqueness
+                # across multiple Tier 2 variants on the same block name.
+                suffix = tags[-1] if tags else mut["block_name"]
                 tried_params.add(f"t2_{mut['block_name']}_{suffix}")
 
     finally:

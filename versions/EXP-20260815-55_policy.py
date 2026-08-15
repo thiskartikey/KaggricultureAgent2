@@ -142,9 +142,9 @@ TARGET_COOP_BY_DAY = ((11, 0), (7, 0), (0, 0))
 TARGET_COW = 8
 TARGET_SHEEP = 6
 TARGET_GOOSE = 0
-TARGET_STRAWBERRY = 35  # unchanged; top players ~35-36 but layout differs
+TARGET_STRAWBERRY = 38  # unchanged; top players ~35-36 but layout differs
 TARGET_MELON = 9
-LAND_UNLOCK_DAY = (7, 9)          # earliest day for the 2nd / 3rd quadrant
+LAND_UNLOCK_DAY = (7, 11)          # earliest day for the 2nd / 3rd quadrant
 SHED_CAP = 100
 CASH_FLOOR = 200                   # keep enough to buy a day of animal feed
 

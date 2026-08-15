@@ -46,6 +46,7 @@ CRITICAL_IDENTIFIERS = {
 TIER1_PARAMS = {
     "TARGET_COW", "TARGET_SHEEP", "TARGET_STRAWBERRY", "TARGET_MELON",
     "CASH_FLOOR", "LAND_UNLOCK_DAY", "TARGET_PASTURE_BY_DAY",
+    "TARGET_GOOSE",
 }
 
 # ---------------------------------------------------------------------------
@@ -180,8 +181,10 @@ def mutate_tier2(
             indent = ""
             break
         # Match rule comment blocks like `# ── R5: ...`
+        # Require the ── decorator so plain inline comments (e.g. "# R1: ..." in
+        # _seed_targets) are not confused with the actual rule-block markers.
         if block_name.startswith("R") and re.match(
-            rf"^\s*#.*{re.escape(block_name)}\b", line
+            rf"^\s*#\s*──.*{re.escape(block_name)}\b", line
         ):
             start_line = i
             # Indent is the block's indentation level (inside a function)
@@ -266,6 +269,45 @@ def mutate_tier3(
 
 
 # ---------------------------------------------------------------------------
+# Composite mutator — apply several sub-mutations atomically
+# ---------------------------------------------------------------------------
+
+def mutate_composite(
+    source: str,
+    steps: List[Dict[str, Any]],
+) -> Tuple[str, str]:
+    """Apply a sequence of sub-mutations on the same source in order.
+
+    Each step is a dict with a ``tier`` key plus the tier-specific kwargs:
+      {"tier": 1, "param_name": "LAND_UNLOCK_DAY", "new_value": (6, 10)}
+      {"tier": 2, "block_name": "R1", "new_block_source": "..."}
+      {"tier": 3, "task_name": "plant", "new_tier": 1}
+
+    Returns (final_source, combined_unified_diff).
+    """
+    original = source
+    current = source
+    for step in steps:
+        tier = step["tier"]
+        if tier == 1:
+            current, _ = mutate_tier1(current, step["param_name"], step["new_value"])
+        elif tier == 2:
+            current, _ = mutate_tier2(current, step["block_name"], step["new_block_source"])
+        elif tier == 3:
+            current, _ = mutate_tier3(current, step["task_name"], step["new_tier"])
+        else:
+            raise ValueError(f"Unknown sub-mutation tier: {tier}")
+
+    diff = "".join(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        current.splitlines(keepends=True),
+        fromfile="policy.py (before)",
+        tofile="policy.py (after)",
+    ))
+    return current, diff
+
+
+# ---------------------------------------------------------------------------
 # High-level mutation entry point
 # ---------------------------------------------------------------------------
 
@@ -274,17 +316,21 @@ def apply_mutation(
     tier: int,
     **kwargs: Any,
 ) -> Tuple[str, str]:
-    """Apply a Tier 1/2/3 mutation and run the AST linter.
+    """Apply a Tier 1/2/3 (or composite) mutation and run the AST linter.
 
     Returns (new_source, diff) or raises ASTLintError on failure.
 
     Tier 1 kwargs: param_name, new_value
     Tier 2 kwargs: block_name, new_block_source
     Tier 3 kwargs: task_name, new_tier
+    Tier 0 (composite) kwargs: steps — list of sub-mutation dicts
     """
     source = Path(policy_path).read_text(encoding="utf-8")
 
-    if tier == 1:
+    if tier == 0:
+        # Strip metadata keys that are not sub-mutation steps
+        new_source, diff = mutate_composite(source, kwargs["steps"])
+    elif tier == 1:
         new_source, diff = mutate_tier1(source, kwargs["param_name"], kwargs["new_value"])
     elif tier == 2:
         new_source, diff = mutate_tier2(source, kwargs["block_name"], kwargs["new_block_source"])
