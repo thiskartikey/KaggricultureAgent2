@@ -1,29 +1,42 @@
 # Submission Packaging Instructions
 
-To submit the agent to the Kaggle competition, you must follow the packaging rules specified below.
+To submit the agent to the Kaggle competition, follow the packaging rules below.
 
 ## Packaging Script
 
-The repository includes a script [build_submission.py](file:///home/gytdrop/Documents/HACKATHONS/2026/kaggle/kagriculture/build_submission.py) to package the agent.
-
-Run the following command to build the submission archive:
 ```bash
-python build_submission.py
+python3 build_submission.py
 ```
-This command creates `ml_submission.tar.gz` in the root directory.
+
+This creates `ml_submission.tar.gz` in the root directory.
 
 ## File Mappings Inside the Archive
 
-Kaggle requires the entrypoint script to be named `main.py`. The build script maps files accordingly:
+Kaggle requires the entrypoint script to be named `main.py`.
 
-| Local Source File | Tar Destination Path | Purpose |
-| :--- | :--- | :--- |
+| Local Source File | Tar Destination | Purpose |
+|---|---|---|
 | `ml_main.py` | `main.py` | Main agent entrypoint |
-| `heuristic.py` | `heuristic.py` | Pure heuristic strategy engine |
+| `policy.py` | `policy.py` | Strategy engine |
 
 ## Kaggle Environment Constraints
 
-1. **Zero-Dependency Heuristics**: The submission package is purely rule-based and requires no heavy machine learning dependencies (e.g. PyTorch, stable-baselines3), allowing it to fit into an ultra-lightweight ~11 KB archive.
-2. **Execution Limits**: The agent must return actions within the game's time limit per step (typically 1 second). The heuristic executes in ~2.4 ms per call, well within limits.
-3. **No stdout pollution**: Do not add print statements to `heuristic.py` or `ml_main.py` since stdout is reserved for sandbox execution communications.
+1. **Zero-Dependency**: No heavy ML dependencies (PyTorch, TensorFlow, Gym, scipy) — `policy.py` imports only `math`.
+2. **Execution Limits**: Must return actions within 1 second. Heuristic executes in ~2–5 ms per step.
+3. **No stdout pollution**: `policy.py` and `ml_main.py` must not print to stdout. Validated by `tests/test_policy_invariants.py`.
 
+## Pre-Submission Checklist
+
+```bash
+# 1. Run all tests
+python3 -m pytest tests/ -q
+
+# 2. Build tarball
+python3 build_submission.py
+
+# 3. Verify tarball contents
+tar -ztvf ml_submission.tar.gz
+
+# 4. Submit
+kaggle competitions submit kaggriculture -f ml_submission.tar.gz -m "EXP-YYYYMMDD-NN description"
+```

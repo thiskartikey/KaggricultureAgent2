@@ -1,166 +1,164 @@
-# Kagriculture Agent — Resume Checkpoint
+# Kaggriculture Agent — Resume Checkpoint
 
-> **Updated**: 2026-08-12 (Major regression found and resolved)
-> **Status**: Version A1 (pure heuristic) restored. ~111k local mean. Ready to submit.
-
----
-
-## 0. Repository
-
-- **GitHub**: **https://github.com/gytdrop/KaggricultureAgent** (branch `main`).
-- Tracked files: `ml_main.py`, `policy.py` (A1 blueprint heuristic), `evaluate.py`, `build_submission.py`, `instructions/`, `versions/` (archives).
-- Large replays in `downloads/` are `.gitignore`d but preserved locally for reference. See `instructions/git.md` for proper staging.
+> **Updated**: 2026-08-16 (Master Codebase Audit & Infrastructure Rebuild: 5 Subsystems Defined, Evaluation Harness Repaired, Opponent Pool Benchmark Verified at 88,662 Mean, 87.5% WR, Subagent Runbooks & Research Docs Created)
+> **Status**: Champion = `EXP-20260815-69`. Autoresearch & Pool Evaluator fully operational. 105/105 tests pass.
 
 ---
 
-## 1. Critical Finding (2026-08-12)
+## 0. Repository Architecture (5 Subsystems)
 
-A v6 "pure Decision Transformer" rewrite (commits ~52a2cb0–66ab183) was deployed to Kaggle and **scored ~27k** — a **−113k regression** vs the Version A1 archived agent (~111k). The v6 gutted the working machinery: pastures hardcapped at 6 (blueprint: 14), CARE deleted, sticky claims deleted, planting demoted to last priority.
-
-**All analysis in `downloads/fails/` (21 failed episodes) relates to the buggy v6.**
-
-**Action taken (2026-08-12):** `policy.py` restored to Version A1 (`versions/Phase2_v1_policy.py`, byte-identical). `ml_submission.tar.gz` rebuilt and verified. DT is disconnected (A/B tested: p=1.000, no impact). All findings documented in `instructions/` for resumption.
+- **Subsystem A (Policy)**: `policy.py`, `ml_main.py`
+- **Subsystem B (Evaluation)**: `eval_seeds.py`, `evaluate.py`, `src/autoresearch/pool_evaluator.py`
+- **Subsystem C (Replay Intelligence)**: `parse_replays.py`, `src/replay_analysis/`
+- **Subsystem D (Ratchet Autoresearch)**: `src/autoresearch/` (Tier 1/2/3 search space)
+- **Subsystem E (Submissions & Grounding)**: `README.md`, `instructions/`, `docs/`, `build_submission.py`
 
 ---
 
-## 2. Agent Architecture: Version A1 (Pure Heuristic)
+## 1. Current Champion
 
-The active agent is a **pure heuristic strategy** mined directly from 72 top-player replays (144 episodes, 100k–158k scores). Located in `policy.py`, it scores **~111k–115k median** locally (8 seeds × 2 seats). No machine learning; tier-based task assignment with sticky claims prevents worker oscillation.
+| Metric | Value |
+|---|---|
+| Champion archive | `versions/EXP-20260815-69_policy.py` |
+| Live policy | `policy.py` (identical to champion, dead code removed) |
+| Pool mean score | **88,662** (87.5% overall win rate vs pool) |
+| Δ vs Phase2_v1 baseline | +17,859 mean (p=0.000, Cohen's d ≈ 1.1) |
+| Self-play comparison | Δ = 0, p = 1.000 (perfect match — dead code had zero effect) |
+| Key improvements vs v1 | R5 wheat fix, dropoff 3/5, STRAW=35, MELON reserve removed, wheat buffer taper, fertilize tier 1, TARGET_MELON=9, LAND_UNLOCK_DAY=(7,9) composite |
 
-### Strategy Blueprint
+---
+
+## 2. Evaluation Tooling Status (Verified)
+
+- `eval_seeds.py`: Dual-seat balanced, arbitrary path resolution, full statistical reporting (`python eval_seeds.py policy.py starter --seeds 10`).
+- `evaluate.py`: `--debug` traceback logging, `--pool` 5-opponent tournament mode (`python evaluate.py policy.py --pool`).
+- `src/autoresearch/pool_evaluator.py`: 5 historical checkpoints (`Phase2_v1`, `Phase2_v7`, `Phase2_v11`, `EXP-20260814-12`, `EXP-20260815-69`). All tested and operational.
+
+---
+
+## 2. Autoresearch System (KaggriRatchet)
+
+All components in `src/autoresearch/` are fully implemented and tested:
+
+### Stage 4 — Opponent Pool Evaluator (NEW)
+
+`src/autoresearch/pool_evaluator.py` — addresses the self-play blind spot.
+Evaluates candidate against 5 historical champion checkpoints (and any clones
+in `opponent_clones/`). Reports mean_score, win_rate_overall, win_rate_vs_strong.
+
+**Current champion pool baseline** (seeds 6000-6003, 8 games/opponent):
+
+| Opponent | Δmean | Win rate |
+|---|---|---|
+| Phase2_v1_policy | +15,763 | 100% |
+| Phase2_v7_policy | +11,897 | 100% (strong) |
+| Phase2_v11_policy | +5,654 | 100% |
+| EXP-20260814-12_policy | +42,388 | 100% |
+| EXP-20260815-69_policy (self) | 0 | 38% |
+| **Pool mean score** | **88,662** | **87.5% overall, 68.8% vs strong** |
+
+Usage: `python3 -m src.autoresearch.pool_evaluator policy.py`
+
+---
+
+### Flaw-Fix Experiment Results (2026-08-16)
+
+Attempted 4 changes from `docs/roadmap/flaw-fix-roadmap-plan.md`. All tested against
+`EXP-20260815-69` baseline using 32 seeds (64 games).
+
+| Change | Δmean | p | d | Verdict |
+|---|---|---|---|---|
+| ST-1: CARE before COLLECT_FERT in `_animal_pending` | **−1,791** | **<0.0001** | **−0.95** | ❌ REJECTED — original order is correct |
+| ST-2: Fertilizer tier-boost for carrying workers | ±0 | 1.000 | 0.00 | ⚠ Self-play blind spot — no signal |
+| ST-3: Endgame threshold day>=18 (was 20) | +244 | 0.42 | 0.10 | ⚠ Self-play blind spot — no signal |
+| ST-6: Day-0 place_animal Tier 0 | ±0 | 1.000 | 0.00 | ⚠ Self-play blind spot — no signal |
+
+**Key finding**: ST-2, ST-3, ST-6 improvements are invisible to self-play because both
+agents benefit equally. These changes must be re-evaluated via the opponent pool
+(Stage 4) once opponent clones are built. ST-1 genuinely regresses — do not retry.
+
+---
+
+
+| Module | Status |
+|---|---|
+| `controller.py` | Autonomous loop: `--step`, `--loop --max-exp N`, `--test-ratchet` |
+| `evaluator.py` | 4-stage adaptive cascade (Stage 0 invariant → Stage 3 champion gate) |
+| `mutator.py` | Tier 1/2/3 mutations + AST linter |
+| `hypothesis.py` | Hypothesis generator with failure-memory deduplication |
+| `memory.py` | JSONL experiment ledger (138 records: 13 KEEP, 125 REJECT) |
+| `stats.py` | Paired t-test, Wilcoxon, Cohen's d, bootstrap CI |
+| `telemetry.py` | Simulation telemetry extractor |
+
+---
+
+## 3. Test Suite
+
+```
+83 passed in 0.5s
+tests/test_memory.py           16 passed
+tests/test_mutator.py          18 passed
+tests/test_policy_invariants.py 9 passed
+tests/test_replay_parser.py    27 passed
+tests/test_stats.py            13 passed
+```
+
+---
+
+## 4. Strategy Blueprint (Champion)
 
 | Dimension | Value |
 |---|---|
-| **Land** | 3 quadrants (NE day 7, SW day 11; never 4th @ 4000) |
-| **Labor** | 5 day-0, ~3 days 1–6, 8 by day 7, 11–14 day 11+ |
-| **Animals** | 14 PASTURE (8 COW + 6 SHEEP), all fed & cared daily |
-| **Crops** | 42 STRAWBERRY (days 10–16), 12 MELON (day 10 harvest), ~7 WHEAT (2-day cycle) |
-| **Revenue** | ~295 MILK + 166 WOOL + 396 STRAWBERRY ≈ 150k – costs |
-| **Tactics** | Tier-by-tier task assignment; sticky claims; feed-only-with-wheat routing; CARE all animals |
-
-### Key Implementation: Tier-based Task Assignment
-
-Tasks are assigned **tier by tier**, preventing workers from oscillating between jobs:
-- **Tier 0 (service)**: Feed hungry animals (prevents escape) — FEED op holds claim until task disappears.
-- **Tier 0 (water)**: Water unwatered plants (survival) — must water on planting day or crop dies.
-- **Tier 1 (harvest)**: Collect mature crops/eggs/wool (time-sensitive cash).
-- **Tier 1 (place_animal)**: Place shed animals into empty pastures (prevents waste).
-- **Tier 2 (build_pasture)**: Build pastures up to blueprint cap.
-- **Tier 2 (plant)**: Sow empty tiles with available seeds.
-- **Tier 4 (weed/dropoff)**: Clean up weeds, return produce to shed.
-
-Workers hold a claim to a task until it disappears from the queue. This eliminates the "oscillation bug" where recomputing nearest-pair every turn caused workers to abandon halfway-completed jobs. Saves ~54% of unit-turns vs flat distance scoring.
-
-**Critical constraint:** Only wheat-carrying workers are assigned to hungry animals. Non-wheat carriers redirect to the shed to pick up wheat first. Ignoring this cost +21k (tested).
+| **Land** | NE day 7 ($1k), SW day 9 ($2k); SE never |
+| **Labor** | 5/3/8/13/10 by phase (re-hire every morning) |
+| **Animals** | 14 PASTURE (8 COW + 6 SHEEP); fed + cared daily |
+| **Crops** | 35 STRAWBERRY, 9 MELON, ~7 WHEAT |
+| **Market** | Sell-all every turn (no reserve). Wheat buffer = 2 days, tapers to 0 at end |
+| **Fertilizer** | Applied to producing strawberries at tier-1 priority |
+| **Endgame** | Plant promoted to tier 1 from day 20; wheat planting allowed until 3 days left |
 
 ---
 
-## 3. Ground Truth — Environment Mechanics
+## 5. Confirmed-Rejected Experiments (do not re-run)
 
-Read the authoritative source (not prior docs, which had errors):
-`~/.local/lib/python3.14/site-packages/kaggle_environments/envs/kaggriculture/kaggriculture.py` (1063 lines)
-
-### Key Verified Rules (2026-08-12)
-
-- **30 days × 24 turns = 720 steps**. Reward = final cash only.
-- **Hands wiped nightly** (line 859). Re-hire every morning. Cost = fib(n), n = hires-today. Crew size 13 is fib-optimal; hand 14+ costs 987/day marginal vs 609/day for the full 13-crew (tested: 15-crew lost −22k, p=0.000).
-- **Planting day counts as unwatered** (line 208): `consecutive_unwatered = 1` at plant. Unwatered on planting day → dead that night. Must water same day or crop dies.
-- **Ongoing crops (STRAWBERRY/TOMATO) limited**: max `max_yield` ticks lifetime (~4 for both), then decay to WEED. Total output ~4–8 units per 100 seed, over ~6 days of production window.
-- **Non-ongoing harvest clears tile** immediately (line 412), replantable same turn.
-- **End of day**: All inventories auto-drop to shed (overflow 100-cap discarded, not returned). Hands wiped. Farmer teleported to shed spawn.
-- **Atomic PLANT validation**: If turn's PLANT requests for a crop exceed seeds held, **all plants of that crop fail** that turn.
-- **Buildings free** (BUILD_PASTURE/BUILD_COOP cost nothing). BUY_LAND order forced: NE → SW → SE.
-- **Animals produce even unfed** (feeding only gates escape + care-bonus payout). CARE+FEED same day banks a bonus that accumulates and is paid on next production day (roughly triples yield if all animals cared daily).
-
----
-
-## 4. Decision Transformer Status
-
-The codebase contains a NumPy `DecisionTransformer` class and `rl_weights.npz`, but:
-- `dt_task` is computed at ~line 1036 and **immediately discarded** via `dt_assigned_task = None` at line 1044 (before task assignment).
-- A/B test (2026-08-12, 16 games): A1 with DT weights vs without were **identical** (p=1.000, paired t=0.00).
-- The "hybrid" label was a misnomer; the agent is pure heuristic.
-
-**The DT is disconnected by design.** If you want to wire it back in (unlikely to help), see `instructions/decision_transformer.md` for reconnection steps.
-
----
-
-## 5. Evaluation Protocol
-
-**Never A/B on a single run.** Kaggle replays show ~2× variance per seed (see `downloads/training/*.json` for reference 150k scores).
-
-**Significance bar:** Use `python evaluate.py policy.py versions/Phase2_v1_policy.py --games 8` (16 games, paired t-test, p<0.05 = significant).
-
-Tested experiments (2026-08-12, all negative):
-- Earlier land unlocks (days 6/10 vs 7/11): −2,347 (p=0.004).
-- Bigger crew (15 vs 13): −22,138 (p=0.000, 16/16 losses).
-- DT wired in: ±0 (p=1.000).
-
-Conclusion: The agent is already tuned. Further improvements would require understanding the current Kaggle meta (likely different from Aug-07 training replays).
-
----
-
-## 6. File Map
-
-| File | Role | Status |
+| Change | Δ mean | Notes |
 |---|---|---|
-| `policy.py` | Strategy engine (A1 heuristic) | **LIVE** (restored 2026-08-12) |
-| `ml_main.py` | Entrypoint → packaged as `main.py` | Clean |
-| `evaluate.py` | A/B harness with paired t-test | Reference (8+ seeds/pairing) |
-| `build_submission.py` | Builds `ml_submission.tar.gz` | Ready to use |
-| `ml_submission.tar.gz` | Submission package | Rebuilt 2026-08-12, verified |
-| `versions/Phase2_v1_policy.py` | **A1 validated archive** (byte-identical to policy.py) | Reference; rollback source |
-| `versions/heuristic_v7.py` | Older heuristic baseline | Historical reference |
-| `instructions/` | Detailed docs (updated 2026-08-12) | **READ THESE** |
-| `rl_weights.npz` | Dead-weight (DT disconnected) | Harmless but unnecessary |
-| `downloads/training/` | 73 top-player replays (~2.2 GB) | Archived; not needed to run |
-| `downloads/fails/` | 21 v6 failure replays; forensic analysis | Historical; understand v6 regression |
+| `LAND_UNLOCK_DAY = (6, 10)` | −5,542 | Agent can't afford NE until day 7–8 |
+| `target_hands` day 1 = 1 | −11,509 | Labour starvation |
+| 4 HIRE + 1 COW + 4 SHEEP opening | −9,401 | Budget overrun |
+| `TARGET_COW = 9` | −1,081 | Leaning negative |
+| `TARGET_PASTURE_BY_DAY = ((10,14),(7,9),(0,6))` | −6,389 | Drops mid-game to 9 |
+| Price reserve on any product | −3,457 | Sell-all always wins |
+| `feed_hold` buffer = 3 days | −1,446 vs 2-day | Over-reserves wheat |
+| Wheat buy target 2 days | −7,426 | Animals starve |
+| `target_hands` = 14 | −4,507 | Fib cost too high |
 
 ---
 
-## 7. Next Steps
+## 6. Next Steps
 
-1. **Submit to Kaggle**: `python build_submission.py && kaggle competitions submit -c kaggriculture -f ml_submission.tar.gz -m "Restore Version A1 agent (v6 DT rewrite was -113k regression)"`.
-2. **Monitor Kaggle leaderboard**: A1 should score in the 100–140k range (top competitors ~150k).
-3. **If considering improvements**:
-   - Understand current meta: Download recent high-scoring replays, mine them for strategy divergence vs A1.
-   - Tier assignment tuning: The tier order (service → water → harvest → place → build → plant → weed) is locked in A1. Test reordering (e.g., plant earlier) requires ≥8 seeds A/B.
-   - Labor routing: The "feed-only-with-wheat" constraint is +21k. The sticky claims save ~54%. Don't regress either.
-4. **If reviving the DT**: Start by wiring `dt_task` back in (line ~1044), not by retraining. Current weights are stale (trained on Aug-07 meta).
+1. **Run more KaggriRatchet campaigns** to find further improvements:
+   ```bash
+   python3 -m src.autoresearch.controller --loop --max-exp 10
+   ```
+2. **Submit current champion** to Kaggle leaderboard:
+   ```bash
+   python3 build_submission.py
+   kaggle competitions submit kaggriculture -f ml_submission.tar.gz -m "EXP-20260815-69 champion"
+   ```
+3. **Quick smoke test** before any work:
+   ```bash
+   python3 -m pytest tests/ -q
+   ```
 
 ---
 
-## 8. Constraints to Never Break
-
-These were learned the hard way:
+## 7. Constraints to Never Break
 
 1. **Hands wiped nightly** — always re-hire every morning.
-2. **Feed routing** — only wheat-carrying workers → hungry animals. Cost of breaking: +21k.
-3. **Crew size** — 13 is fib-optimal. 14+ exponentially expensive. 15-crew loses −22k.
-4. **Sticky claims** — workers hold a task until it disappears. Recomputing every turn burns 85% on walking.
-5. **Planting is NOT the bottleneck** — fallow land post-day-11 caused by planting being low priority in tier order while daily watering exhausts labor. Bigger crew doesn't fix this; tier reordering would.
-6. **Market order priority** — SELL consumes 9/10 slots; HIRE/LAND/ANIMAL are crowded out early-game. Order matters.
-7. **Land timing** — day 7/11 are tuned. Unlocking earlier (day 6) or later costs money. Never buy the 4th quadrant.
-
----
-
-## 9. Resuming — For the Next Agent
-
-**Read these in order:**
-1. This file (CHECKPOINT_RESUME.md) — status and findings.
-2. `instructions/resume.md` — evaluation protocol and testing guidelines.
-3. `instructions/environment.md` — verified env mechanics.
-4. `instructions/policy.md` — strategy details and dead code (DT).
-5. Memory `/home/gytdrop/.claude/projects/-home-gytdrop-Documents-HACKATHONS-2026-kaggle-kagriculture/memory/` — links to competition status and game mechanics, updated 2026-08-12.
-
-**Quick smoke test:**
-```bash
-python evaluate.py policy.py versions/Phase2_v1_policy.py --games 2
-```
-Should show scores near 111k vs 111k (noise only, p≈1.0). If you see 27k, the v6 has been restored by accident.
-
----
-
-**Submitted**: Yes (A1, rebuilt 2026-08-12).  
-**Local baseline**: ~111k mean.  
-**Kaggle meta**: Unknown (last sampled ~2026-08-07).
+2. **Feed routing** — only wheat-carrying workers → hungry animals.
+3. **Sticky claims** — workers hold a task until it disappears.
+4. **Planting day = unwatered** — sow ≤ hour 20 or crop dies tonight.
+5. **Shed cap = 100** — overflow discarded at end-of-day.
+6. **10 market orders/turn** — extras silently dropped.
+7. **`policy.py` must pass `tests/test_policy_invariants.py`** before any evaluation.

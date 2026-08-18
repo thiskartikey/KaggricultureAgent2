@@ -4,9 +4,9 @@ We run an A/B evaluation harness locally using [evaluate.py](file:///home/gytdro
 
 ## Running Evaluations
 
-To run a head-to-head match between two agents (e.g. `ml_main.py` and `heuristic.py`):
+To run a head-to-head match between two agents:
 ```bash
-python evaluate.py ml_main.py heuristic.py --games 8
+python3 evaluate.py policy.py versions/EXP-20260815-69_policy.py --games 8
 ```
 
 - Each seed is played **twice** (once with Agent A in seat 0, once with Agent B in seat 0) to prevent seat advantage bias.

@@ -10,8 +10,8 @@ To ensure consistency and prevent corruption of files in this repository, all AI
 
 ## Development & Code Guidelines
 
-1. **Stdout Cleanliness**: The Kaggle environment communicates with the agent using standard input/output. Never add arbitrary print statements (`print()`) to files intended for submission (`ml_main.py` and `heuristic.py`). Only structured/expected stdout is allowed.
-2. **Legacy RL Code**: The RL path (`env_wrapper.py`, `rl_inference.py`, `rl_weights.npz`) has been archived in `versions/`. Do not restore or use these unless explicitly reviving the RL model.
+1. **Stdout Cleanliness**: Never add arbitrary print statements to `ml_main.py` or `policy.py`. Validated by `tests/test_policy_invariants.py`.
+2. **Legacy RL/DT Code**: All RL and DT code has been removed from `policy.py`. Do not restore unless explicitly testing a new ML approach.
 
 ## File Cleanup Restrictions
 

@@ -1,57 +1,78 @@
-# Resuming Development (Version A1, Restored 2026-08-12)
+# Resuming Development
 
-If you are a new AI agent or human resuming work, follow these steps to understand the current state and make changes safely.
+If you are a new AI agent or human resuming work, read this first.
 
-## Status Summary
+## Current State
 
-**Current agent:** Version A1 (pure heuristic, ~111k local mean). **Submission status:** Ready to upload to Kaggle (rebuilt `ml_submission.tar.gz` verified).
+- **Champion policy**: `policy.py` = `versions/EXP-20260815-69_policy.py` (functionally identical, dead code removed).
+- **Autoresearch system**: Fully built in `src/autoresearch/` — controller, evaluator, mutator, hypothesis generator, memory, stats.
+- **Test suite**: 83/83 tests pass in `tests/`.
+- **Evaluation**: Use `src/autoresearch/evaluator.py` or the legacy `evaluate.py` CLI.
 
-**Critical history:** A v6 "Decision Transformer rewrite" (commits ~52a2cb0 through 66ab183) was deployed and scored ~27k on Kaggle (113k regression). It gutted the working blueprint (pastures 6→6 max, CARE deleted, planting demoted to last priority). All analysis in `downloads/fails/` and `downloads/p2_v2_failure/` relates to that buggy v6. The agent has now been restored to A1 (byte-identical to `versions/Phase2_v1_policy.py`).
-
-## Step 1: Verify Core Repository Files
-
-Ensure that all necessary core files are present in the root directory:
-- [ml_main.py](file:///home/gytdrop/Documents/HACKATHONS/2026/kaggle/kagriculture/ml_main.py) (Main entrypoint, delegates to policy.agent())
-- [policy.py](file:///home/gytdrop/Documents/HACKATHONS/2026/kaggle/kagriculture/policy.py) (A1 heuristic strategy engine)
-- [evaluate.py](file:///home/gytdrop/Documents/HACKATHONS/2026/kaggle/kagriculture/evaluate.py) (Local A/B evaluation harness, 8+ seeds recommended for p<0.05)
-- [build_submission.py](file:///home/gytdrop/Documents/HACKATHONS/2026/kaggle/kagriculture/build_submission.py) (Packaging script, creates ml_submission.tar.gz)
-
-**Validated baseline:** `versions/Phase2_v1_policy.py` (byte-identical to working policy.py as of 2026-08-12).
-
-## Step 2: Run a Smoke Test Evaluation
-
-Before modifying any code, run a quick validation to check that the current code runs without errors.
+## Step 1: Smoke Test
 
 ```bash
-python evaluate.py policy.py versions/Phase2_v1_policy.py --games 2
+python3 -m pytest tests/ -q
+# Should show: 83 passed
+
+python3 -c "
+from src.autoresearch.evaluator import _run_games
+from src.autoresearch.stats import full_stats
+cand, base, _ = _run_games('policy.py', 'versions/EXP-20260815-69_policy.py', [9000], 2)
+print(full_stats(cand, base))
+# Δmean should be 0 — they are functionally identical
+"
 ```
 
-This will run 2 seeds x 2 seats (4 games total). You should see scores near 111k vs 111k (noise only, p≈1.0). If they differ significantly, you have local changes.
+## Step 2: Understanding the Champion
 
-## Step 3: Evaluation Protocol
+See [`instructions/policy.md`](policy.md) for full strategy details and the complete list of rejected experiments.
 
-When testing changes:
-- **Always test against A1 baseline**: `python evaluate.py policy.py versions/Phase2_v1_policy.py --games 8` (16 games, paired t-test).
-- **Significance bar:** p < 0.05 (≥10 seeds x 2 seats, i.e., 20 games total) is required to claim improvement.
-- **Single-seed scoring:** Kaggle replays show ~2× variance per run (see `downloads/training/*.json` for reference 150k scores). Never A/B on one run.
+Key constants to never blindly change (all have been tested and rejected):
+- `LAND_UNLOCK_DAY = (6, 10)` → **−5,542** (agent can't afford unlock day 6)
+- `target_hands` day 1 = 1 → **−11,509** (labour starvation)
+- price reserve on sells → **−3,457** (sell-all beats holding)
+- `TARGET_PASTURE_BY_DAY = ((10,14),(7,9),(0,6))` → **−6,389** (drops mid-game to 9)
 
-## Step 4: Making Changes
+## Step 3: Running an Experiment
 
-- **To adjust heuristic rules:** Edit [policy.py](file:///home/gytdrop/Documents/HACKATHONS/2026/kaggle/kagriculture/policy.py) directly.
-- **To test:** Use `python evaluate.py policy.py versions/Phase2_v1_policy.py --games 8` (8+ seeds).
-- **To submit:** `python build_submission.py && kaggle competitions submit -c kaggriculture -f ml_submission.tar.gz -m "description"`.
+### Via KaggriRatchet (automated)
+```bash
+python3 -m src.autoresearch.controller --step        # one experiment
+python3 -m src.autoresearch.controller --loop --max-exp 5
+```
 
-## Key Constraints (Learned the Hard Way)
+### Manually
+```bash
+# Edit policy.py, then test vs champion:
+python3 - << 'EOF'
+from src.autoresearch.evaluator import _run_games
+from src.autoresearch.stats import full_stats
+import time
+seeds = list(range(3000, 3016))
+t0 = time.perf_counter()
+c, b, failed = _run_games('policy.py', 'versions/EXP-20260815-69_policy.py', seeds, 6)
+print(f"{time.perf_counter()-t0:.1f}s  failed={failed}")
+s = full_stats(c, b)
+print(f"Δmean={s['delta_mean']:+,.0f}  p_t={s['p_ttest']:.4f}  d={s['cohens_d']:.3f}")
+EOF
+```
 
-1. **Hands are wiped nightly.** Re-hire every morning or workers will vanish.
-2. **Feed routing is critical.** Only wheat-carrying workers can service hungry animals; ignoring this costs +21k (tested).
-3. **Crew size: 13 is optimal.** Fib hire cost means hand 14+ cost 987/day marginal vs 609/day for the full crew. Testing 15-crew lost −22k (p=0.000).
-4. **Sticky claims prevent oscillation.** Workers holding a task until it disappears saves ~54% of unit-turns vs. recomputing nearest-pair every turn.
-5. **Planting is not the bottleneck.** Fallow land post-day-11 is caused by planting being low priority (tier 2) while daily watering treadmill (tier 0–1) starves it for labor; crew size doesn't fix this.
-6. **Earlier land unlocks lose money.** Testing days (6,10) vs (7,11) lost −2,347 (p=0.004); day-7/11 are already tuned.
+**Promotion bar**: `p_ttest < 0.05`, `p_wilcoxon < 0.05`, `cohens_d > 0.20`, `delta_mean > 0` over 32 games.
 
-## Files You Can Safely Ignore
+## Step 4: Submitting
 
-- `rl_weights.npz`: Dead-weight (DT disconnected, p=1.000 no impact).
-- `train_dt.py`, `versions/rl_inference_v0.py`: Dead code (RL approach never shipped).
-- `versions/`: Historical snapshots; reference only. The good archive is `Phase2_v1_policy.py`.
+```bash
+python3 build_submission.py
+kaggle competitions submit kaggriculture -f ml_submission.tar.gz -m "EXP-YYYYMMDD-NN description"
+```
+
+## Key Invariants (Never Break)
+
+1. **Hands wiped nightly** — always re-hire every morning.
+2. **Feed routing** — only wheat-carrying workers → hungry animals.
+3. **Sticky claims** — workers hold a task until it disappears; prevents oscillation.
+4. **Planting day = unwatered day 1** — sow at hour ≤ 20 or the plant dies tonight.
+5. **Shed cap = 100** — overflow discarded silently at end-of-day.
+6. **10 market orders/turn** — extras silently dropped.
+7. **No ML imports** — policy.py must pass the invariant gate (test_policy_invariants.py).

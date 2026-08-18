@@ -324,6 +324,174 @@ _COMPOSITE_MUTATIONS = [
         ["land_unlock", "sw_early", "c3_sw_day9"],
         2000.0,
     ),
+    # ── C4: CARE before COLLECT_FERTILIZER in _animal_pending ────────────────
+    # Replay analysis (43 live games): midday (h=12) uncared animals average
+    # 370 on day 15, in 43/43 games. Root cause: current order is
+    #   FEED → HARVEST → COLLECT_FERTILIZER → CARE
+    # COLLECT_FERT steals the worker slot; the worker is then reassigned before
+    # CARE fires. The care bonus (+1 yield) only banks when BOTH fed AND cared
+    # on the same day — skipping CARE voids the bonus.
+    # Fix: swap CARE before COLLECT_FERTILIZER.
+    (
+        "c4_care_before_collect_fert",
+        [
+            {
+                "tier": 2,
+                "block_name": "_animal_pending",
+                "new_block_source": '''\
+def _animal_pending(t, has_wheat=True):
+    """Outstanding work on an occupied pasture, in the order it should be done.
+
+    Feeding leads: an animal unfed two days running escapes, taking its 400-500
+    purchase price and every future yield with it.
+
+    CARE comes before COLLECT_FERTILIZER: the care bonus (+1 yield) only banks
+    when an animal is both fed AND cared on the same day.  COLLECT_FERT can
+    safely follow — missing one collection is cheaper than missing the care bonus.
+    """
+    if not t.get("fed_today") and has_wheat:
+        return "FEED"
+    if int(t.get("yield_units", 0)) > 0:
+        return "HARVEST"
+    if not t.get("cared_today"):
+        return "CARE"
+    if t.get("fertilizer_available"):
+        return "COLLECT_FERTILIZER"
+    return None
+''',
+            },
+        ],
+        (
+            "CARE before COLLECT_FERTILIZER in _animal_pending: reorder service ops so "
+            "the care bonus (+1 yield/day) is captured before COLLECT_FERT steals the "
+            "worker slot. Replay evidence: 370 uncared animals at h=12 on day 15 in "
+            "43/43 live games. Estimated +$3-5k/game."
+        ),
+        ["care_order", "_animal_pending", "c4_care_first"],
+        4000.0,
+    ),
+    # ── C5: fertilizer collect-then-apply in single pasture visit ────────────
+    # After COLLECT_FERTILIZER, worker walks to shed, drops, then another worker
+    # picks up and applies. Replay: 4-7 fertilizer units idle at h=12 every day
+    # from day 15 onward (~$12k/game at 5 tiles × $160/application × 15 days).
+    # Fix: after the service_soon visit completes COLLECT_FERTILIZER, if the
+    # worker is now carrying fertilizer and there are fertilizable tiles in
+    # scan["fertilize"], route directly to FERTILIZE without a shed round-trip.
+    # Also incorporates the C4 CARE-before-COLLECT_FERT reorder so both fixes
+    # are active together.
+    # NOTE: _unit_op signature gains an optional `scan` parameter; the call
+    # site in _agent() already passes scan implicitly — but _unit_op must
+    # accept it. The call in _agent is updated in this composite too.
+    (
+        "c5_fert_collect_apply_v3",
+        [
+            # Step 1 (only): _unit_op — after service_soon COLLECT_FERTILIZER, route
+            # directly to nearest fertilizable tile instead of shedward.
+            # No call-site change needed: we re-scan `me` inside the function
+            # to get the current fertilize list, keeping the existing signature.
+            {
+                "tier": 2,
+                "block_name": "_unit_op",
+                "new_block_source": '''\
+def _unit_op(pos, task, private, unit_idx, board, me, shed_wheat):
+    invs = private.get("inventories") or []
+    inv = invs[unit_idx] if unit_idx < len(invs) else {}
+    kind = task[0]
+    target = task[1] if len(task) > 1 else None
+    pos = tuple(pos)
+    sheds = shed_adjacent_cells(board, me)
+    shed_positions = [tuple(c) for c in sheds]
+
+    def _go(cell, act):
+        if pos == tuple(cell):
+            return act
+        st = step_toward(pos, cell)
+        return [st] if st else act
+
+    def _to_shed(act):
+        if pos in shed_positions:
+            return act
+        tgt = min(sheds, key=lambda c: manhattan(pos, c))
+        st = step_toward(pos, tgt)
+        return [st] if st else act
+
+    def _fetch(item, qty, then_cell, act):
+        """Grab `item` from the shed, then head for the job."""
+        if int(inv.get(item, 0)) > 0:
+            return _go(then_cell, act)
+        store = int((private.get("shed") or {}).get(item, 0))
+        if store <= 0:
+            return ["PASS"]
+        return _to_shed(["PICKUP", item, min(store, qty)])
+
+    if kind in ("service", "service_soon"):
+        # Work the whole pasture in place: feed, harvest, care, collect.
+        tiles = me.get("tiles") or []
+        x, y = target
+        tile = tiles[y][x] if 0 <= y < len(tiles) and 0 <= x < len(tiles[y]) else None
+        if not isinstance(tile, dict):
+            return ["PASS"]
+        has_wheat = int(inv.get("WHEAT", 0)) > 0
+        pend = _animal_pending(tile, has_wheat)
+        if pend is None:
+            # Only feeding is left and this worker is empty-handed.
+            if not tile.get("fed_today"):
+                return _fetch("WHEAT", 8, target, ["FEED"])
+            # Worker finished all pasture work and is carrying fertilizer.
+            # Re-scan the farm to find fertilizable tiles and route directly,
+            # collapsing the collect-shed-pickup-apply relay into one visit.
+            # _scan is cheap (single tile pass) and avoids a call-site change.
+            if int(inv.get("FERTILIZER", 0)) > 0:
+                live_scan = _scan(me, 0)  # day=0 is safe: fertilize list ignores day
+                fert_tiles = live_scan.get("fertilize") or []
+                if fert_tiles:
+                    nearest_fert = _nearest(pos, fert_tiles)
+                    if nearest_fert is not None:
+                        return _go(nearest_fert, ["FERTILIZE"])
+            return ["PASS"]
+        return _go(target, [pend])
+    if kind == "place_animal":
+        animal, cell = target
+        return _fetch(animal, 1, cell, ["PLACE", animal])
+    if kind == "harvest_crop":
+        return _go(target, ["HARVEST"])
+    if kind in ("water", "water_soon"):
+        return _go(target, ["WATER"])
+    if kind == "build_pasture":
+        return _go(target, ["BUILD_PASTURE"])
+    if kind == "build_coop":
+        return _go(target, ["BUILD_COOP"])
+    if kind == "fertilize":
+        return _go(target, ["FERTILIZE"])
+    if kind == "plant":
+        crop, cell = target
+        return _go(cell, ["PLANT", crop])
+    if kind == "weed":
+        return _go(target, ["DIG"])
+    if kind == "dropoff":
+        return _to_shed(["DROP"])
+    return ["PASS"]
+
+
+# ── Main agent internal logic ─────────────────────────────────────────────────
+# Sticky task claims, kept per seat so self-play in one process cannot cross
+# them.  Reset whenever the step counter is not the expected successor (new
+# episode, new day, replay) so stale claims never leak between games.
+_CLAIM_STATE = {}
+''',
+            },
+        ],
+        (
+            "Fertilizer collect-then-apply in one visit: after service_soon completes "
+            "COLLECT_FERTILIZER, worker re-scans farm and routes directly to the nearest "
+            "fertilizable strawberry tile instead of returning to shed. "
+            "Eliminates the 2-worker relay (collect->shed->pickup->apply). "
+            "Replay evidence: 4-7 fertilizer units idle at h=12 every day from day 15, "
+            "estimated ~$12k/game. v3: no CARE reorder, _unit_op only."
+        ),
+        ["fert_pipeline_v3", "_unit_op", "c5_fert_apply_v3"],
+        12000.0,
+    ),
 ]
 
 
@@ -850,6 +1018,518 @@ def _seed_targets(day, total_days, planted, free_n, harvest_crop_n=0):
         ["seeds", "_seed_targets", "sw_straw_boost"],
         900.0,
     ),
+    # ── T2-P: lower endgame plant-promotion threshold to fix expansion delay ──
+    # Replay evidence (43 live games): 34 free tiles at day 10 h=12 after SW
+    # land unlock; 17 free at day 11 h=00. The current `endgame = day >= 20`
+    # flag in _assign_tasks promotes `plant` to Tier 1, but the post-expansion
+    # planting delay starts at day 7 (NE) and day 10 (SW) — 10+ days before
+    # the endgame threshold triggers.
+    # Fix: lower the threshold to `day >= 10 or len(free_cells) > 15` so the
+    # promotion fires whenever there is genuinely a lot of empty land to fill,
+    # not only in the final third of the game.
+    (
+        "_assign_tasks",
+        '''\
+def _assign_tasks(positions, tasks, invs, board, claims=None, feed_cells=None,
+                  day=0, total_days=30):
+    """Tier-by-tier greedy nearest-pair matching, with sticky claims.
+
+    Recomputing assignments from scratch every turn made workers oscillate:
+    a unit walking to a tile would be swapped onto another job the moment a
+    colleague drifted closer, so nobody ever arrived.  A claim is therefore
+    kept until the job it points at disappears from the task list.
+    """
+    assignment = {}
+    taken = set()
+    free = set(range(len(positions)))
+
+    live = {}
+    for t in tasks:
+        live.setdefault((t[0], _task_cell(t)), t)
+
+    # 1. Honour existing claims that still correspond to outstanding work.
+    for ui, prev in (claims or {}).items():
+        if ui not in free:
+            continue
+        key = (prev[0], _task_cell(prev))
+        if key in live and key not in taken:
+            assignment[ui] = live[key]
+            taken.add(key)
+            free.discard(ui)
+
+    # 2. Fill the rest by a global score, strongly preferring d=0 for non-urgent tasks.
+    # Promote "plant" to Tier 1 when there are many free tiles (post land-expansion)
+    # OR in the classic endgame (day >= 20).  The old threshold of day >= 20 let
+    # the NE (day 7) and SW (day 10) expansions idle for 1-2 days.
+    free_tile_count = sum(1 for t in tasks if t[0] == "plant")
+    endgame = day >= 20 or free_tile_count >= 10
+    feed_cells = feed_cells or set()
+    have_wheat = any(int((invs[ui] if ui < len(invs) else {}).get("WHEAT", 0)) > 0 for ui in free)
+    pairs = []
+
+    for ui in free:
+        for t in tasks:
+            key = (t[0], _task_cell(t))
+            if key in taken:
+                continue
+            tier = TASK_TIER.get(t[0], 3)
+            # Endgame / expansion: plant is now equal priority to service_soon so freed
+            # tiles get sown before CARE/COLLECT_FERTILIZER steals every worker slot.
+            if endgame and t[0] == "plant":
+                tier = 1
+            cell = _task_cell(t)
+            if cell is None:
+                continue
+            inv = invs[ui] if ui < len(invs) else {}
+            carrying = int(inv.get("WHEAT", 0)) > 0
+            if t[0] == "fertilize" and int(inv.get("FERTILIZER", 0)) <= 0:
+                continue
+            hungry = t[0] in ("service", "service_soon") and cell in feed_cells
+            if hungry and have_wheat and not carrying:
+                continue
+
+            d = manhattan(positions[ui], cell)
+            if hungry and carrying:
+                d -= 3
+
+            # Score logic: Tier 0 is absolute priority.
+            # If a worker is AT the tile (d=0), they should do the task there instead
+            # of walking, UNLESS there\'s a Tier 0 emergency.
+            score = tier * 1000 + d
+            if d == 0 and tier > 0:
+                score -= 1500  # Pulls it below the tier above it, but not below tier 0.
+
+            pairs.append((score, ui, key, t))
+
+    pairs.sort(key=lambda p: (p[0], p[1]))
+    for score, ui, key, t in pairs:
+        if ui not in free or key in taken:
+            continue
+        assignment[ui] = t
+        taken.add(key)
+        free.discard(ui)
+    return assignment
+''',
+        "_assign_tasks: promote plant to Tier 1 when >= 10 plant tasks exist (post land-expansion) not just at day >= 20.",
+        ["routing", "_assign_tasks", "expansion_plant"],
+        5000.0,
+    ),
+    # ── T2-Q: ST-3 revised — time-gated expansion planting (days 7–13 only) ──
+    # T2-P promoted plant whenever free_tile_count >= 10, which fired mid-game
+    # and starved animal feeding (-4760). Revised: only promote plant to Tier 1
+    # during the two land-expansion windows (days 7–13) when the NE/SW quads
+    # just unlocked. Outside that window, use normal Tier 2. This is narrower
+    # and avoids stealing workers from animals during established midgame.
+    (
+        "_assign_tasks",
+        '''\
+def _assign_tasks(positions, tasks, invs, board, claims=None, feed_cells=None,
+                  day=0, total_days=30):
+    """Tier-by-tier greedy nearest-pair matching, with sticky claims.
+
+    Recomputing assignments from scratch every turn made workers oscillate:
+    a unit walking to a tile would be swapped onto another job the moment a
+    colleague drifted closer, so nobody ever arrived.  A claim is therefore
+    kept until the job it points at disappears from the task list.
+    """
+    assignment = {}
+    taken = set()
+    free = set(range(len(positions)))
+
+    live = {}
+    for t in tasks:
+        live.setdefault((t[0], _task_cell(t)), t)
+
+    # 1. Honour existing claims that still correspond to outstanding work.
+    for ui, prev in (claims or {}).items():
+        if ui not in free:
+            continue
+        key = (prev[0], _task_cell(prev))
+        if key in live and key not in taken:
+            assignment[ui] = live[key]
+            taken.add(key)
+            free.discard(ui)
+
+    # 2. Fill the rest by a global score, strongly preferring d=0 for non-urgent tasks.
+    # Promote "plant" to Tier 1 in two cases:
+    #   (a) Classic endgame (day >= 20): expired melon/straw tiles free up fast
+    #   (b) Land-expansion window (days 7-13): NE unlocks day 7, SW day 10.
+    #       Only promote when >=15 plant tasks queued (genuine expansion, not routine).
+    free_tile_count = sum(1 for t in tasks if t[0] == "plant")
+    expansion_window = 7 <= day <= 13 and free_tile_count >= 15
+    endgame = day >= 20 or expansion_window
+    feed_cells = feed_cells or set()
+    have_wheat = any(int((invs[ui] if ui < len(invs) else {}).get("WHEAT", 0)) > 0 for ui in free)
+    pairs = []
+
+    for ui in free:
+        for t in tasks:
+            key = (t[0], _task_cell(t))
+            if key in taken:
+                continue
+            tier = TASK_TIER.get(t[0], 3)
+            if endgame and t[0] == "plant":
+                tier = 1
+            cell = _task_cell(t)
+            if cell is None:
+                continue
+            inv = invs[ui] if ui < len(invs) else {}
+            carrying = int(inv.get("WHEAT", 0)) > 0
+            if t[0] == "fertilize" and int(inv.get("FERTILIZER", 0)) <= 0:
+                continue
+            hungry = t[0] in ("service", "service_soon") and cell in feed_cells
+            if hungry and have_wheat and not carrying:
+                continue
+
+            d = manhattan(positions[ui], cell)
+            if hungry and carrying:
+                d -= 3
+
+            score = tier * 1000 + d
+            if d == 0 and tier > 0:
+                score -= 1500
+
+            pairs.append((score, ui, key, t))
+
+    pairs.sort(key=lambda p: (p[0], p[1]))
+    for score, ui, key, t in pairs:
+        if ui not in free or key in taken:
+            continue
+        assignment[ui] = t
+        taken.add(key)
+        free.discard(ui)
+    return assignment
+''',
+        "_assign_tasks: promote plant to Tier 1 during land-expansion window (days 7-13, >=15 plant tasks) not just day>=20.",
+        ["routing", "_assign_tasks", "expansion_plant_v2"],
+        4000.0,
+    ),
+    # ── T2-R: ST-5 — strawberry always in early-hour sells ───────────────────
+    # Replay evidence (43 live games): 21/43 games have strawberry unsold at EOD
+    # day 21 (avg 7.7 units). The R2 block throttles sells to 3 orders at hours
+    # 0-1. When 4+ products need selling simultaneously, strawberry (the first in
+    # SELL_PRODUCE, highest value at $120 base) is sometimes cut.
+    # Fix: at hours 0-1, always include STRAWBERRY and MELON sells in the first
+    # 2 slots before the 3-order cap. This ensures high-value items clear every
+    # turn regardless of queue order pressure.
+    (
+        "R2",
+        '''\
+    # ── R2: sell first so the rest of the turn is funded ─────────────────────
+    # Taper the wheat buffer in the final days: animals don\'t need feed after
+    # the game ends, so release held wheat as we approach the last turn.
+    days_left = total_days - day
+    effective_buffer = max(0, min(2, days_left - 1))
+    hold = {"WHEAT": feed_hold(fed_animals, int(shed.get("WHEAT", 0)),
+                               days_buffer=effective_buffer)}
+    sells = plan_sells(shed, minv, day, hour, total_days, hold)
+    # At hours 0-1, ensure STRAWBERRY and MELON are always sold (highest value).
+    # Other products fill up to 3 slots; from hour 2 all sells fire normally.
+    if hour >= 2:
+        orders += sells
+    else:
+        # Priority sells: STRAWBERRY and MELON first (up to 2 slots), then
+        # fill remaining slot(s) from the rest of the sell list.
+        priority = [o for o in sells if o[1] in ("STRAWBERRY", "MELON")]
+        others   = [o for o in sells if o[1] not in ("STRAWBERRY", "MELON")]
+        orders += (priority + others)[:3]
+    for o in orders:
+        inv = int(minv.get(o[1], 10000))
+        rev, _ = sell_revenue(o[1], inv, o[2])
+        money_left += rev
+
+''',
+        "R2 sell priority: STRAWBERRY+MELON always in first 2 early-hour sell slots. Replay: 21/43 games unsold EOD day 21.",
+        ["market", "R2", "sell_priority_straw"],
+        1500.0,
+    ),
+    # ── T2-S: ST-6 — day-0 place_animal boost via _build_tasks ───────────────
+    # Replay evidence: only 3/4 purchased animals are placed by EOD day 0.
+    # place_animal is Tier 1, competing with plant (also Tier 1). On day 0 the
+    # 5-hand crew plants 11 MELON + 7 WHEAT seeds, leaving one animal in shed.
+    # Fix: on day 0, emit place_animal tasks before plant tasks in the task list.
+    # Since sticky-claim matching is order-stable, earlier tasks get first pick
+    # of nearby workers. This is a task-ordering fix, not a tier change.
+    # Implementation: in _build_tasks, insert a day==0 guard that moves all
+    # place_animal tasks to the top of the task list.
+    (
+        "_build_tasks",
+        '''\
+def _build_tasks(scan, me, private, free_cells, day, total_days, hour=0):
+    tasks = []
+    # One "service" visit per occupied pasture bundles HARVEST + FEED +
+    # COLLECT_FERTILIZER + CARE, so a worker pays the walk once and then works
+    # the tile for up to four turns instead of being pulled away between each.
+    for cell in scan["service"]:
+        tasks.append(("service", cell))
+    for cell in scan["service_soon"]:
+        tasks.append(("service_soon", cell))
+    for cell in scan["water"]:
+        tasks.append(("water", cell))
+    for cell in scan["water_soon"]:
+        tasks.append(("water_soon", cell))
+    for cell in scan["harvest_crop"]:
+        tasks.append(("harvest_crop", cell))
+
+    # Place animals waiting in the shed into empty pastures.
+    shed = private.get("shed") or {}
+    invs = private.get("inventories") or []
+    unplaced = {}
+    for a in ("COW", "SHEEP", "GOOSE"):
+        n = int(shed.get(a, 0)) + sum(int(i.get(a, 0)) for i in invs)
+        if n > 0:
+            unplaced[a] = n
+    place_tasks = []
+    if unplaced:
+        for (cell, kind) in scan["structures_empty"]:
+            if kind not in ("PASTURE", "COOP"):
+                continue
+            for a in list(unplaced):
+                if unplaced[a] > 0:
+                    req_kind = ANIMAL_SPECS[a]["structure"]
+                    if kind == req_kind:
+                        place_tasks.append(("place_animal", (a, cell)))
+                        unplaced[a] -= 1
+                        break
+    # On day 0: insert place_animal tasks at the front so they get first worker
+    # picks before planting — replay shows 1 animal stranded overnight on day 0.
+    if day == 0:
+        tasks = place_tasks + tasks
+    else:
+        tasks.extend(place_tasks)
+
+    # Build structures up to the blueprint cap -- never pave over crop land.
+    have_pastures = _count_structures(me, "PASTURE")
+    deficit_pasture = target_pastures(day) - have_pastures
+    if deficit_pasture > 0 and day < total_days - 8:
+        for cell in free_cells[:deficit_pasture]:
+            tasks.append(("build_pasture", cell))
+        free_cells = free_cells[deficit_pasture:]
+
+    have_coops = _count_structures(me, "COOP")
+    deficit_coop = target_coops(day) - have_coops
+    if deficit_coop > 0 and day < total_days - 8:
+        for cell in free_cells[:deficit_coop]:
+            tasks.append(("build_coop", cell))
+        free_cells = free_cells[deficit_coop:]
+
+    # Sow the remaining free land.  A plant counts its planting day as unwatered
+    # already, so anything sown too late to also be watered today dies tonight.
+    # In the endgame (< 5 days left) we accept late-day plantings since the tile
+    # otherwise just sits empty and we\'ll water it the same turn or next turn.
+    plant_cutoff = 22 if (total_days - day) < 5 else 20
+    if hour <= plant_cutoff:
+        seeds = dict(private.get("seeds") or {})
+        planted = _crop_census(me)
+        for cell in free_cells:
+            crop = _plant_choice(day, total_days, planted, seeds)
+            if crop is None:
+                break
+            seeds[crop] = int(seeds.get(crop, 0)) - 1
+            planted[crop] = planted.get(crop, 0) + 1
+            tasks.append(("plant", (crop, cell)))
+
+    for cell in scan["fertilize"]:
+        tasks.append(("fertilize", cell))
+    for cell in scan["weeds"]:
+        tasks.append(("weed", cell))
+    return tasks
+''',
+        "_build_tasks day-0 place_animal priority: insert place_animal tasks at front on day 0 so animals are placed before planting begins.",
+        ["routing", "_build_tasks", "place_animal_day0"],
+        500.0,
+    ),
+    # ── T2-T: _assign_tasks — endgame plant-promotion with free-tile guard ────
+    # Prior attempts (expansion_plant, expansion_plant_v2) failed because the
+    # always-on or task-count trigger fired mid-game and starved animal feeding.
+    # This variant fires ONLY when BOTH conditions hold:
+    #   (a) day >= 7 (post-NE unlock) AND
+    #   (b) at least 10 plant tasks currently queued (genuine idle land).
+    # Outside this window, endgame = day >= 20 as before.
+    # Key difference from prior attempts: the guard is conjunctive (day AND tasks)
+    # not disjunctive, so it won't activate on a fully-planted farm.
+    (
+        "_assign_tasks",
+        '''\
+def _assign_tasks(positions, tasks, invs, board, claims=None, feed_cells=None,
+                  day=0, total_days=30):
+    """Tier-by-tier greedy nearest-pair matching, with sticky claims.
+
+    Recomputing assignments from scratch every turn made workers oscillate:
+    a unit walking to a tile would be swapped onto another job the moment a
+    colleague drifted closer, so nobody ever arrived.  A claim is therefore
+    kept until the job it points at disappears from the task list.
+    """
+    assignment = {}
+    taken = set()
+    free = set(range(len(positions)))
+
+    live = {}
+    for t in tasks:
+        live.setdefault((t[0], _task_cell(t)), t)
+
+    # 1. Honour existing claims that still correspond to outstanding work.
+    for ui, prev in (claims or {}).items():
+        if ui not in free:
+            continue
+        key = (prev[0], _task_cell(prev))
+        if key in live and key not in taken:
+            assignment[ui] = live[key]
+            taken.add(key)
+            free.discard(ui)
+
+    # 2. Fill the rest by a global score, strongly preferring d=0 for non-urgent tasks.
+    # Promote "plant" to Tier 1 when BOTH conditions hold:
+    #   (a) day >= 7 — post-NE land unlock; new tiles need sowing
+    #   (b) at least 10 plant tasks in queue — farm genuinely has idle land
+    # The conjunctive guard prevents mid-game activation on a fully-sown farm.
+    # Classic endgame (day >= 20) also promotes plant as before.
+    n_plant_tasks = sum(1 for t in tasks if t[0] == "plant")
+    endgame = day >= 20 or (day >= 7 and n_plant_tasks > 10)
+    feed_cells = feed_cells or set()
+    have_wheat = any(int((invs[ui] if ui < len(invs) else {}).get("WHEAT", 0)) > 0 for ui in free)
+    pairs = []
+
+    for ui in free:
+        for t in tasks:
+            key = (t[0], _task_cell(t))
+            if key in taken:
+                continue
+            tier = TASK_TIER.get(t[0], 3)
+            if endgame and t[0] == "plant":
+                tier = 1
+            cell = _task_cell(t)
+            if cell is None:
+                continue
+            inv = invs[ui] if ui < len(invs) else {}
+            carrying = int(inv.get("WHEAT", 0)) > 0
+            if t[0] == "fertilize" and int(inv.get("FERTILIZER", 0)) <= 0:
+                continue
+            hungry = t[0] in ("service", "service_soon") and cell in feed_cells
+            if hungry and have_wheat and not carrying:
+                continue
+
+            d = manhattan(positions[ui], cell)
+            if hungry and carrying:
+                d -= 3
+
+            score = tier * 1000 + d
+            if d == 0 and tier > 0:
+                score -= 1500
+
+            pairs.append((score, ui, key, t))
+
+    pairs.sort(key=lambda p: (p[0], p[1]))
+    for score, ui, key, t in pairs:
+        if ui not in free or key in taken:
+            continue
+        assignment[ui] = t
+        taken.add(key)
+        free.discard(ui)
+    return assignment
+''',
+        "_assign_tasks: promote plant to Tier 1 when day>=7 AND n_plant_tasks>10 (both conditions conjunctive). Prior attempts failed because they were always-on; this guard only fires on genuinely idle land.",
+        ["assign_tasks_endgame", "plant_promotion", "free_tile_guard"],
+        2000.0,
+    ),
+    # ── T2-U: R2 early-hour sell throttle width 3→5 ──────────────────────────
+    # Current: `orders += sells if hour >= 2 else sells[:3]`
+    # With 9 sellable products the queue can have 4–9 items. At hours 0-1 only 3
+    # fire. Increasing the cap to 5 lets MILK, WOOL, FERTILIZER also sell at
+    # hours 0–1. Prior experiments changed ORDERING (sell_priority_straw) or
+    # removed the cap entirely (sell_gate). This narrows to width=5 only.
+    (
+        "R2",
+        '''\
+    # ── R2: sell first so the rest of the turn is funded ─────────────────────
+    # Taper the wheat buffer in the final days: animals don't need feed after
+    # the game ends, so release held wheat as we approach the last turn.
+    days_left = total_days - day
+    effective_buffer = max(0, min(2, days_left - 1))
+    hold = {"WHEAT": feed_hold(fed_animals, int(shed.get("WHEAT", 0)),
+                               days_buffer=effective_buffer)}
+    sells = plan_sells(shed, minv, day, hour, total_days, hold)
+    # At hours 0-1 allow up to 5 sell orders (up from 3) so MILK+WOOL+FERTILIZER
+    # can clear alongside STRAWBERRY/MELON; from hour 2 all sells fire normally.
+    orders += sells if hour >= 2 else sells[:5]
+    for o in orders:
+        inv = int(minv.get(o[1], 10000))
+        rev, _ = sell_revenue(o[1], inv, o[2])
+        money_left += rev
+
+''',
+        "R2 early-hour sell throttle width 3→5: lets MILK/WOOL/FERTILIZER also sell at hours 0-1 without flooding the queue.",
+        ["sell_throttle_fix", "early_hour_sell", "high_value_first"],
+        600.0,
+    ),
+    # ── T2-V: _scan fertilize — phase-gate to near-yield tiles only ──────────
+    # Currently ALL ongoing-crop tiles with `fertilized_until_day < today` enter
+    # the fertilize queue. That's up to 35 strawberry tiles every day, most
+    # mid-cycle (yield not due for another 1-2 days). The large list competes
+    # with Tier-1 service/harvest tasks in _assign_tasks scoring.
+    # Fix: only queue tiles where the next yield is within 3 days of this turn
+    # (i.e. the fertilize application will actually pay off before end of game
+    # AND before the current crop cycle ends).
+    # Proxy: days since planted mod yield_interval ≤ 3 OR (total_days - day) ≤ 5.
+    (
+        "_scan",
+        '''\
+def _scan(me, day, total_days=30):
+    out = dict(water=[], water_soon=[], service=[], service_soon=[],
+               harvest_crop=[], weeds=[], structures_empty=[], fertilize=[],
+               feed=[])
+    tiles = me.get("tiles") or []
+    for y, row in enumerate(tiles):
+        for x, t in enumerate(row):
+            if not isinstance(t, dict):
+                continue
+            kind = t.get("kind")
+            if kind == "PLANT":
+                if not t.get("watered_today"):
+                    if _water_urgent(t, day):
+                        out["water"].append((x, y))
+                    else:
+                        out["water_soon"].append((x, y))
+                if _crop_harvestable(t, day, total_days):
+                    out["harvest_crop"].append((x, y))
+                # Fertilizer gate: only queue tiles that are close to their next
+                # yield (within 3 days) OR near end-of-game.  This keeps the list
+                # short so _assign_tasks does not over-allocate workers to fertilize
+                # at the expense of harvest/care tasks.
+                spec = CROP_SPECS.get(t.get("crop"))
+                if (spec and spec["ongoing"]
+                        and int(t.get("fertilized_until_day", -1)) < day
+                        and day - int(t.get("planted_day", day)) >= spec["first"] - 2):
+                    days_left = total_days - day
+                    cycle = spec.get("interval", 2)
+                    days_since_first = day - int(t.get("planted_day", day)) - spec["first"]
+                    phase = days_since_first % cycle if days_since_first >= 0 else 0
+                    # Queue only if within 3 steps of next yield OR in final 5 days
+                    if days_left <= 5 or (cycle - phase) <= 3:
+                        out["fertilize"].append((x, y))
+            elif kind in ("PASTURE", "COOP"):
+                if t.get("animal"):
+                    if not t.get("fed_today"):
+                        out["feed"].append((x, y))
+                    if _animal_pending(t) is not None:
+                        if not t.get("fed_today"):
+                            out["service"].append((x, y))
+                        else:
+                            out["service_soon"].append((x, y))
+                else:
+                    out["structures_empty"].append(((x, y), kind))
+            elif kind == "WEED":
+                out["weeds"].append((x, y))
+    return out
+''',
+        "_scan fertilize gate: only queue fertilize tasks within 3 days of next yield or in final 5 days, reducing list size from ~35 to ~5-10 daily to free workers for harvest/care.",
+        ["scan_fertilize_guard", "fert_lookahead", "ongoing_crop_fert"],
+        1500.0,
+    ),
+    # NOTE: T2-W (R1 opening v2, tags=['opening_r1_v2','healthstone_blueprint','day0_animals'])
+    # was tested as EXP-20260816-09 and rejected at Stage 1 with delta=-107k.
+    # Reducing to 1 COW + 4 SHEEP + 8 MELON collapsed the early-game seed economy.
+    # Do not retest this approach — the current 2 COW + 2 SHEEP + 11 MELON opening is optimal.
 ]
 
 
@@ -919,6 +1599,11 @@ def _all_tier3_candidates(
         ("build_pasture", 1, "Elevate build_pasture: 2->1 to build animal capacity faster early-game."),
         ("weed",          3, "Elevate weed: 4->3 to clear weeds before they spread."),
         ("dropoff",       3, "Elevate dropoff: 4->3 so full workers bank produce sooner."),
+        # Replay evidence: 4-7 fertilizer units idle at h=12 every day from day 15 in 43/43
+        # live games. fertilize is currently Tier 1, same as service_soon — but service_soon
+        # has 14 animal tiles dominating the task list and always wins the worker allocation.
+        # Moving fertilize to Tier 0 guarantees workers apply fertilizer first each turn.
+        ("fertilize",     0, "Elevate fertilize: 1->0 — replay shows 4-7 fert units idle at h=12 daily from day 15; Tier 0 ensures application before service_soon monopolises all workers."),
     ]
 
     candidates = []

@@ -316,14 +316,16 @@ class TestParseReplay:
         """Bad JSON file yields zero turns without raising."""
         path = tmp_path / "bad.json"
         path.write_text("{not valid json!!!}")
-        turns = list(parse_replay(path, corpus_player="Ezzzzzekki"))
+        with pytest.warns(UserWarning, match="Could not load"):
+            turns = list(parse_replay(path, corpus_player="Ezzzzzekki"))
         assert turns == []
 
     def test_empty_steps(self, tmp_path):
         """Replay with empty steps list yields zero turns."""
         replay = _make_replay(steps=[])
         path = _write_replay(tmp_path, "empty.json", replay)
-        turns = list(parse_replay(path, corpus_player="Ezzzzzekki"))
+        with pytest.warns(UserWarning, match="No steps in"):
+            turns = list(parse_replay(path, corpus_player="Ezzzzzekki"))
         assert turns == []
 
     def test_missing_keys_in_step(self, tmp_path):

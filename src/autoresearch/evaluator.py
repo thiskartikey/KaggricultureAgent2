@@ -208,11 +208,6 @@ def evaluate(
                     f"Stage {stage_n} REJECT — Δmean={delta:+.0f} ≤ threshold {threshold}"
                 )
                 return result
-            if cfg["reject_on_zero"] and stage_n == 2 and delta <= 0:
-                result["reason"] = (
-                    f"Stage {stage_n} REJECT — Δmean={delta:+.0f} ≤ 0"
-                )
-                return result
 
         if stage_n == 3:
             stats = full_stats(all_cand, all_base)

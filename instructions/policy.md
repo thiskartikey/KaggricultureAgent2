@@ -1,34 +1,49 @@
-# Agent Policy — Version A1 (Restored 2026-08-12)
+# Agent Policy — Champion Heuristic (current: EXP-20260815-69)
 
-This document outlines the strategy for the agent's core decision policy located in [policy.py](file:///home/gytdrop/Documents/HACKATHONS/2026/kaggle/kagriculture/policy.py).
+This document describes the strategy implemented in [`policy.py`](../policy.py).
 
-## Current State: Pure Heuristic Blueprint Engine
+## Current State: Pure Heuristic Blueprint Engine (880 lines)
 
-`policy.py` (Version A1) implements a highly optimized **pure heuristic strategy** mined directly from 72 top-player replays (144 episodes, 100k–158k scores). It achieves a median score of **~111k–115k** locally (8 seeds x 2 seats).
+`policy.py` is a **pure heuristic strategy** mined from top-player leaderboard replays. It scores
+roughly **65k–72k** in self-play against Phase2_v1 (Δmean ≈ +17k vs v1 baseline). The champion
+version is archived at `versions/EXP-20260815-69_policy.py`.
 
-### Strategy Blueprint (from top-player replays):
-- **Land:** 3 quadrants only (NE day 7, SW day 11; never the 4th at 4000).
-- **Labor:** 5 hands day 0, ~3 days 1–6, 8 by day 7, 11–14 from day 11. Daily re-hire (fib cost).
-- **Animals:** 14 PASTURE (8 COW + 6 SHEEP) from day 11+, all fed and cared daily. Generates ~295 MILK + 166 WOOL / episode.
-- **Crops:** 42 STRAWBERRY (first yield day 10, 4-tick lifetime), 12 MELON (10 days, one harvest), ~7 WHEAT (2-day cycle filler and feed).
-- **Tactics:** Tier-based task assignment (service → water → harvest → place → build → plant → weed); sticky claims to prevent worker oscillation; separate feed-carriers; CARE on all animals daily.
+### Strategy Blueprint
+- **Land:** 3 quadrants only (NE day 7, SW day 9; never the 4th at 4000). `LAND_UNLOCK_DAY = (7, 9)`.
+- **Labor:** 5 hands day 0, 3 days 1–4, 8 days 5–8, 13 from day 9, 10 in final 2 days. Daily re-hire (fib cost).
+- **Animals:** 14 PASTURE (8 COW + 6 SHEEP), all fed and cared daily. `TARGET_PASTURE_BY_DAY = ((11,14),(7,12),(0,6))`.
+- **Crops:** 35 STRAWBERRY, 9 MELON, ~7 WHEAT (2-day cycle filler and feed).
+- **Market:** Sell all produce every turn (no price reserve). Wheat held for feed buffer = 2-day supply. Buffer tapers to 0 on final day.
+- **Fertilize:** Applied to ongoing crops (STRAWBERRY) at tier 1 priority (same urgency as harvest).
+- **Tactics:** Tier-based task assignment (service → water → harvest/fertilize/place_animal → build → plant → weed); sticky claims to prevent oscillation; separate feed-carriers; CARE on all animals daily; shed-proximity ordering of free cells; endgame plant promotion (day ≥ 20: plant tier raised to 1).
 
-### Key Implementation Details:
-- **Sticky task claims:** Each unit holds a claim until the task disappears, preventing workers from oscillating between jobs (saves ~54% of turns vs. flat distance scoring).
-- **Feed routing:** Only wheat-carrying workers are assigned to hungry animals; non-wheat carriers redirect to the shed to pick up wheat first.
-- **Tier system:** Tasks are assigned tier-by-tier (e.g., all "service" tasks before any "plant"), so urgent survival work always runs first.
+### Key Constants (current champion values)
 
-### Discarded Experiments:
-- **Goose/COOP setup:** Costed −7,085 points; never attempted again.
-- **Crew size >13:** Fib hire cost explodes past 13 (14th hand costs 987/day marginal vs 609/day for all 13). Testing 15-crew lost −22,138 (p=0.000, 0/16 wins).
-- **Earlier land unlocks (days 6/10):** Lost −2,347 (p=0.004). Days 7/11 are already tuned.
+| Constant | Value |
+|---|---|
+| `TARGET_COW` | 8 |
+| `TARGET_SHEEP` | 6 |
+| `TARGET_STRAWBERRY` | 35 |
+| `TARGET_MELON` | 9 |
+| `LAND_UNLOCK_DAY` | (7, 9) |
+| `CASH_FLOOR` | 200 |
+| `SHED_CAP` | 100 |
+| `target_hands` returns | 5 / 3 / 8 / 13 / 10 (by phase) |
 
-## Dead Code: Decision Transformer
+### Dead Code Removed
 
-The codebase contains a NumPy `DecisionTransformer` class and `rl_weights.npz`, but:
-- `dt_task` is computed at ~policy.py:1036 
-- **immediately discarded** via `dt_assigned_task = None` at line 1044
-- never influences task assignment or gameplay
-- A/B test (A1 with DT vs without): **identical scores, p=1.000** — confirmed the DT is completely disconnected.
+All DT/RL dead code (`DecisionTransformer`, `obs_to_vec`, `get_dt_task`, `macro_to_farmer_op`,
+`resolve_farmer_op`, `DT_MODEL`, `STATE_HISTORY`, etc.) was removed in the health-check cleanup.
+`policy.py` is now 880 lines with zero dead code.
 
-The "hybrid" label in prior docs is a misnomer; the agent is pure heuristic. The `rl_weights.npz` in the submission tar is inert dead weight (harmless but unnecessary). The DecisionTransformer code is preserved as a reference if future work wants to actually wire it in.
+### Previously Discarded Experiments (do not retry)
+
+| Change | Result | Notes |
+|---|---|---|
+| `LAND_UNLOCK_DAY = (6, 10)` | −5,542 (p=0.000) | Agent can't afford NE unlock until day 7–8 regardless |
+| Day-0 `4 HIRE + 1 COW + 4 SHEEP` | −9,401 (p=0.000) | Budget overrun, starves melon seed coverage |
+| `target_hands` day 1 = 1 | −11,509 (p=0.000) | Labour starvation on day 1 |
+| Goose/COOP setup | −7,085 | Egg revenue can't recover build cost |
+| Crew 15 vs 13 | −22,138 (p=0.000) | Fib cost explodes past 13 |
+| `TARGET_PASTURE_BY_DAY = ((10,14),(7,9),(0,6))` | −6,389 (p=0.000) | Drops mid-game target to 9 |
+| Price reserve on sells | −3,457 vs no-reserve | Sell-all every turn is always better |
