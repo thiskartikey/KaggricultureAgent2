@@ -45,16 +45,15 @@ debug_*.py
 fix_*.py
 run_*.py
 analyze_*.py
-probe_*.py
 
 # Bob internal tooling
 .bob/
 
-# Agent plans, tasks, walkthroughs, and documentation
+# Ephemeral scratch & session checklists
 task.md
 walkthrough.md
-docs/
+probe_*.py
+candidate_*.py
 submission_files/
 versions/v_candidate_*.py
 versions/v_baseline_*.py
-
